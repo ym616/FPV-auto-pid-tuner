@@ -124,11 +124,11 @@ class TuningEngine {
 
     if (isHighNoise) {
       diagnoses.push({
-        title: "Critical D-Term Noise & Motor Thermal Danger",
-        description: "High frequency gyro noise (>200Hz) is being amplified into motor windings. Excess D-gain is driving aggressive motor heating.",
+        title: "High D-Term Noise & Motor Thermal Risk",
+        description: "High-frequency gyro noise (>200Hz) is being amplified into motor windings. Excess D-gain is driving motor heating.",
         type: "danger"
       });
-      warnings.push("⚠️ D-term noise is dangerously high! Lowering D-gain and reducing filter cutoff sliders to protect motor windings.");
+      warnings.push("D-term noise is elevated. Lowering D-gain and reducing filter cutoff sliders to protect motor windings.");
 
       // Reduce D on Roll and Pitch
       recPids.roll.d = Math.round(recPids.roll.d * 0.82);

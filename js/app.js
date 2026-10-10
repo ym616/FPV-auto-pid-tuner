@@ -297,9 +297,9 @@ class AeroPIDApp {
     // Health Score
     document.getElementById('healthScoreNum').innerText = rec.overallHealth;
     const scoreCircle = document.querySelector('.score-circle');
-    if (rec.overallHealth >= 80) scoreCircle.style.borderColor = '#00e676';
-    else if (rec.overallHealth >= 60) scoreCircle.style.borderColor = '#f59e0b';
-    else scoreCircle.style.borderColor = '#ff3366';
+    if (rec.overallHealth >= 80) scoreCircle.style.borderColor = '#137333';
+    else if (rec.overallHealth >= 60) scoreCircle.style.borderColor = '#ea8600';
+    else scoreCircle.style.borderColor = '#c5221f';
 
     // Submetrics
     const rollM = this.stepResults.roll.metrics;
@@ -310,7 +310,7 @@ class AeroPIDApp {
     const noiseRisk = this.fftResults.pitch.metrics.riskLevel;
     const statNoiseRisk = document.getElementById('statNoiseRisk');
     statNoiseRisk.innerText = noiseRisk;
-    statNoiseRisk.style.color = this.fftResults.pitch.metrics.riskColor;
+    statNoiseRisk.style.color = noiseRisk === 'CRITICAL' ? '#c5221f' : noiseRisk === 'ELEVATED' ? '#b06000' : '#137333';
 
     document.getElementById('statFilterMargin').innerText = this.fftResults.pitch.metrics.filterSliderAdvice.replace(/_/g, ' ');
 
@@ -389,28 +389,28 @@ class AeroPIDApp {
     // 1. Step Response Charts
     this.charts.rollStep.renderStepResponse(this.stepResults.roll, {
       title: 'Roll Step Response Curve (0-1.0 Normalized)',
-      color: '#38bdf8'
+      color: '#0b57d0'
     });
 
     this.charts.pitchStep.renderStepResponse(this.stepResults.pitch, {
       title: 'Pitch Step Response Curve (0-1.0 Normalized)',
-      color: '#f59e0b'
+      color: '#ea8600'
     });
 
     this.charts.yawStep.renderStepResponse(this.stepResults.yaw, {
       title: 'Yaw Step Response Curve (0-1.0 Normalized)',
-      color: '#a855f7'
+      color: '#8430ce'
     });
 
     // 2. FFT Charts
     this.charts.rollFFT.renderFFTSpectrum(this.fftResults.roll, {
       title: 'Roll Gyro PSD Noise Spectrum',
-      color: '#38bdf8'
+      color: '#0b57d0'
     });
 
     this.charts.pitchFFT.renderFFTSpectrum(this.fftResults.pitch, {
       title: 'Pitch Gyro PSD Noise Spectrum',
-      color: '#f59e0b'
+      color: '#ea8600'
     });
 
     // 3. Timeline Chart

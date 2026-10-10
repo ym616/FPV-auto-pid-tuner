@@ -8,8 +8,8 @@ const DemoFlightData = {
   scenarios: {
     'bouncy_5in': {
       id: 'bouncy_5in',
-      name: '5" Freestyle 6S — Pitch Bounce-Back & Underdamped',
-      description: 'High P-gain, insufficient D-term damping. Causes noticeable bounce-back after flips and rolls.',
+      name: '5" Freestyle 6S — Pitch Bounce-Back',
+      description: 'High P-gain, insufficient D-term damping. Causes bounce-back after flips and rolls.',
       quadType: '5in_freestyle_6s',
       symptoms: ['bounceback'],
       config: {
@@ -39,8 +39,8 @@ const DemoFlightData = {
 
     'propwash_5in': {
       id: 'propwash_5in',
-      name: '5" Freestyle 6S — Severe Propwash Turbulence',
-      description: 'Sluggish recovery and low dynamic idle. Quad shudders violently during low-throttle 180° turns.',
+      name: '5" Freestyle 6S — Propwash Heavy',
+      description: 'Low dynamic idle and slow recovery causing turbulence in low-throttle descent turns.',
       quadType: '5in_freestyle_6s',
       symptoms: ['propwash'],
       config: {
@@ -70,8 +70,8 @@ const DemoFlightData = {
 
     'hot_motors_3in5': {
       id: 'hot_motors_3in5',
-      name: '3.5" Freestyle — Dangerous D-Term Noise & Hot Motors',
-      description: 'Excessive D-gain and elevated frame resonance at 235Hz. Motors reach 85°C+ after 2 minutes.',
+      name: '3.5" Freestyle — Elevated D-Term Noise',
+      description: 'High D-gain coupled with frame resonance near 235Hz causing elevated motor temperatures.',
       quadType: '3_5in_freestyle_4s',
       symptoms: ['hot_motors'],
       config: {
@@ -101,8 +101,8 @@ const DemoFlightData = {
 
     'sluggish_7in': {
       id: 'sluggish_7in',
-      name: '7" Long Range — Sluggish & Mushy (Overdamped)',
-      description: 'Low master authority and excessive filter lag. Stick inputs feel disconnected and slow to track.',
+      name: '7" Long Range — Sluggish (Overdamped)',
+      description: 'Conservative master gains and filter lag resulting in delayed stick tracking.',
       quadType: '7in_long_range',
       symptoms: ['sluggish_mushy'],
       config: {
@@ -132,8 +132,8 @@ const DemoFlightData = {
 
     'golden_tune_5in': {
       id: 'golden_tune_5in',
-      name: '5" Freestyle 6S — Golden Baseline (Masterfully Tuned)',
-      description: 'Optimal critically-damped response. 36ms rise time, 6% overshoot, zero bounce-back, cool motors.',
+      name: '5" Freestyle 6S — Baseline Reference',
+      description: 'Balanced response with 36ms rise time, 6% overshoot, and clean noise spectrum.',
       quadType: '5in_freestyle_6s',
       symptoms: [],
       config: {
