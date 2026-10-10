@@ -1,0 +1,463 @@
+/**
+ * AeroPID Pro - Intelligent PID Tuning & Betaflight Recommendation Engine
+ * Synthesizes Step Response deconvolution, FFT noise spectrum, quad physics,
+ * and flight controller parameters into actionable, safe Betaflight tunes.
+ */
+
+class TuningEngine {
+  constructor() {
+    this.defaultPresets = {
+      '5in_freestyle_6s': {
+        name: '5" Freestyle 6S',
+        pids: {
+          roll: { p: 48, i: 78, d: 34, f: 125, dMax: 40 },
+          pitch: { p: 54, i: 84, d: 38, f: 135, dMax: 46 },
+          yaw: { p: 48, i: 90, d: 0, f: 115, dMax: 0 }
+        },
+        masterMultiplier: 1.0,
+        antiGravity: 3500,
+        tpaRate: 0.65,
+        tpaBreakpoint: 1350,
+        gyroFilterSlider: 1.0,
+        dtermFilterSlider: 1.0,
+        dynamicIdle: 40,
+        targetRiseTimeMs: 42,
+        targetOvershootPct: 7
+      },
+      '3_5in_freestyle_4s': {
+        name: '3.5" Freestyle 4S',
+        pids: {
+          roll: { p: 44, i: 70, d: 28, f: 110, dMax: 34 },
+          pitch: { p: 48, i: 76, d: 32, f: 120, dMax: 38 },
+          yaw: { p: 42, i: 80, d: 0, f: 100, dMax: 0 }
+        },
+        masterMultiplier: 1.0,
+        antiGravity: 3800,
+        tpaRate: 0.60,
+        tpaBreakpoint: 1300,
+        gyroFilterSlider: 1.1,
+        dtermFilterSlider: 1.0,
+        dynamicIdle: 45,
+        targetRiseTimeMs: 34,
+        targetOvershootPct: 6
+      },
+      '7in_long_range': {
+        name: '7" Long Range / Cinematic',
+        pids: {
+          roll: { p: 62, i: 90, d: 46, f: 95, dMax: 54 },
+          pitch: { p: 70, i: 98, d: 52, f: 105, dMax: 60 },
+          yaw: { p: 55, i: 95, d: 0, f: 85, dMax: 0 }
+        },
+        masterMultiplier: 1.0,
+        antiGravity: 4200,
+        tpaRate: 0.75,
+        tpaBreakpoint: 1250,
+        gyroFilterSlider: 0.85,
+        dtermFilterSlider: 0.85,
+        dynamicIdle: 35,
+        targetRiseTimeMs: 65,
+        targetOvershootPct: 5
+      },
+      'whoop_toothpick': {
+        name: '1S-2S Toothpick / Whoop',
+        pids: {
+          roll: { p: 65, i: 85, d: 36, f: 110, dMax: 42 },
+          pitch: { p: 72, i: 90, d: 40, f: 120, dMax: 46 },
+          yaw: { p: 55, i: 85, d: 0, f: 90, dMax: 0 }
+        },
+        masterMultiplier: 1.0,
+        antiGravity: 4500,
+        tpaRate: 0.50,
+        tpaBreakpoint: 1400,
+        gyroFilterSlider: 1.2,
+        dtermFilterSlider: 1.1,
+        dynamicIdle: 50,
+        targetRiseTimeMs: 28,
+        targetOvershootPct: 8
+      }
+    };
+  }
+
+  /**
+   * Run full tune diagnostic and recommendation algorithm
+   * @param {Object} input
+   *   - stepMetrics: { roll, pitch, yaw }
+   *   - noiseMetrics: { roll, pitch }
+   *   - currentConfig: { pids, masterMultiplier, antiGravity, ... }
+   *   - quadType: string
+   *   - pilotSymptoms: Array<string>
+   * @returns {Object} diagnosis & recommended tune
+   */
+  generateRecommendation(input) {
+    const quadType = input.quadType || '5in_freestyle_6s';
+    const baseline = this.defaultPresets[quadType] || this.defaultPresets['5in_freestyle_6s'];
+    const current = input.currentConfig || JSON.parse(JSON.stringify(baseline));
+    const step = input.stepMetrics || {};
+    const noise = input.noiseMetrics || {};
+    const symptoms = input.pilotSymptoms || [];
+
+    // Clone current to begin recommendations
+    const recPids = {
+      roll: { ...current.pids.roll },
+      pitch: { ...current.pids.pitch },
+      yaw: { ...current.pids.yaw }
+    };
+    let recMasterMultiplier = current.masterMultiplier || 1.0;
+    let recAntiGravity = current.antiGravity || 3500;
+    let recTpaRate = current.tpaRate || 0.65;
+    let recTpaBreakpoint = current.tpaBreakpoint || 1350;
+    let recGyroSlider = current.gyroFilterSlider || 1.0;
+    let recDtermSlider = current.dtermFilterSlider || 1.0;
+    let recDynamicIdle = current.dynamicIdle || 40;
+
+    const diffList = [];
+    const diagnoses = [];
+    const warnings = [];
+
+    // 1. Evaluate Noise Profile First (Safety Barrier)
+    const isHighNoise = (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.riskLevel === 'CRITICAL') ||
+                        (noise.roll && noise.roll.metrics && noise.roll.metrics.riskLevel === 'CRITICAL') ||
+                        symptoms.includes('hot_motors');
+
+    const isElevatedNoise = (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.riskLevel === 'ELEVATED') ||
+                           (noise.roll && noise.roll.metrics && noise.roll.metrics.riskLevel === 'ELEVATED');
+
+    if (isHighNoise) {
+      diagnoses.push({
+        title: "Critical D-Term Noise & Motor Thermal Danger",
+        description: "High frequency gyro noise (>200Hz) is being amplified into motor windings. Excess D-gain is driving aggressive motor heating.",
+        type: "danger"
+      });
+      warnings.push("⚠️ D-term noise is dangerously high! Lowering D-gain and reducing filter cutoff sliders to protect motor windings.");
+
+      // Reduce D on Roll and Pitch
+      recPids.roll.d = Math.round(recPids.roll.d * 0.82);
+      recPids.roll.dMax = Math.round(recPids.roll.dMax * 0.84);
+      recPids.pitch.d = Math.round(recPids.pitch.d * 0.82);
+      recPids.pitch.dMax = Math.round(recPids.pitch.dMax * 0.84);
+
+      // Reduce filter sliders (move left for more filtering)
+      recGyroSlider = Math.max(0.65, +(recGyroSlider * 0.80).toFixed(2));
+      recDtermSlider = Math.max(0.65, +(recDtermSlider * 0.75).toFixed(2));
+    } else if (isElevatedNoise) {
+      diagnoses.push({
+        title: "Elevated High-Frequency Noise Floor",
+        description: "Moderate motor harmonic activity detected. D-term headroom is limited.",
+        type: "warning"
+      });
+      recDtermSlider = Math.max(0.85, +(recDtermSlider * 0.90).toFixed(2));
+    } else {
+      diagnoses.push({
+        title: "Clean Gyro Noise Floor",
+        description: "Noise spectrum is remarkably clean with low high-frequency vibration. Safe to push filtering for minimum phase lag.",
+        type: "success"
+      });
+      // Clean noise floor allows pushing sliders right (less latency!)
+      if (recGyroSlider < 1.3 && !symptoms.includes('hot_motors')) {
+        recGyroSlider = Math.min(1.4, +(recGyroSlider * 1.15).toFixed(2));
+        recDtermSlider = Math.min(1.3, +(recDtermSlider * 1.15).toFixed(2));
+      }
+    }
+
+    // 2. Evaluate Roll & Pitch Step Responses (Damping & Responsiveness)
+    const rollMetrics = step.roll ? step.roll.metrics : null;
+    const pitchMetrics = step.pitch ? step.pitch.metrics : null;
+
+    // A. Pitch Axis Evaluation
+    if (pitchMetrics) {
+      const pOS = pitchMetrics.overshootPercent;
+      const pRise = pitchMetrics.riseTimeMs;
+      const pBounce = pitchMetrics.bounceDepthPercent;
+
+      if (pOS > 15 || pBounce > 8 || symptoms.includes('bounceback')) {
+        diagnoses.push({
+          title: "Pitch Bounce-Back (Underdamped)",
+          description: `Pitch overshoot is ${pOS}% with ${pBounce}% bounce-back trough. The axis oscillates after sharp stops.`,
+          type: "warning"
+        });
+
+        if (!isHighNoise) {
+          // Safe to raise D
+          recPids.pitch.d = Math.min(60, Math.round(recPids.pitch.d * 1.18));
+          recPids.pitch.dMax = Math.min(68, Math.round(recPids.pitch.dMax * 1.20));
+        } else {
+          // High noise: damp by lowering Feedforward & P
+          recPids.pitch.p = Math.round(recPids.pitch.p * 0.90);
+          recPids.pitch.f = Math.round(recPids.pitch.f * 0.85);
+        }
+      } else if (pRise > baseline.targetRiseTimeMs * 1.3 && pOS < 4) {
+        diagnoses.push({
+          title: "Pitch Sluggish / Mushy (Overdamped)",
+          description: `Pitch rise time is ${pRise}ms (target is ~${baseline.targetRiseTimeMs}ms). Quad feels loose or delayed.`,
+          type: "info"
+        });
+        recPids.pitch.p = Math.round(recPids.pitch.p * 1.15);
+        recPids.pitch.f = Math.round(recPids.pitch.f * 1.18);
+      }
+    }
+
+    // B. Roll Axis Evaluation
+    if (rollMetrics) {
+      const rOS = rollMetrics.overshootPercent;
+      const rRise = rollMetrics.riseTimeMs;
+      const rBounce = rollMetrics.bounceDepthPercent;
+
+      if (rOS > 14 || rBounce > 7 || symptoms.includes('bounceback')) {
+        diagnoses.push({
+          title: "Roll Ringing & Bounce-Back (Underdamped)",
+          description: `Roll overshoot is ${rOS}% with ${rBounce}% ringing depth. Needs higher damping or tuned FF.`,
+          type: "warning"
+        });
+
+        if (!isHighNoise) {
+          recPids.roll.d = Math.min(52, Math.round(recPids.roll.d * 1.16));
+          recPids.roll.dMax = Math.min(60, Math.round(recPids.roll.dMax * 1.18));
+        } else {
+          recPids.roll.p = Math.round(recPids.roll.p * 0.92);
+          recPids.roll.f = Math.round(recPids.roll.f * 0.88);
+        }
+      } else if (rRise > baseline.targetRiseTimeMs * 1.25 && rOS < 4) {
+        diagnoses.push({
+          title: "Roll Sluggish Response (Overdamped)",
+          description: `Roll rise time is ${rRise}ms. Quad takes too long to reach commanded stick rate.`,
+          type: "info"
+        });
+        recPids.roll.p = Math.round(recPids.roll.p * 1.14);
+        recPids.roll.f = Math.round(recPids.roll.f * 1.15);
+      }
+    }
+
+    // 3. Propwash Analysis
+    const hasPropwashSymptom = symptoms.includes('propwash');
+    const rollPropwash = noise.roll && noise.roll.bands && noise.roll.bands.propwashIndex > 0.22;
+    if (hasPropwashSymptom || rollPropwash) {
+      diagnoses.push({
+        title: "Propwash Oscillations in Dirty Air",
+        description: "Low-throttle descent turbulence detected. Tuning D-gain, D-max boost, and dynamic idle for propwash rejection.",
+        type: "warning"
+      });
+
+      if (!isHighNoise) {
+        recPids.roll.d = Math.max(recPids.roll.d, Math.round(recPids.roll.d * 1.10));
+        recPids.pitch.d = Math.max(recPids.pitch.d, Math.round(recPids.pitch.d * 1.10));
+        recPids.roll.dMax = Math.max(recPids.roll.dMax, Math.round(recPids.roll.dMax * 1.14));
+        recPids.pitch.dMax = Math.max(recPids.pitch.dMax, Math.round(recPids.pitch.dMax * 1.14));
+      }
+      recDynamicIdle = Math.min(55, Math.round(recDynamicIdle * 1.20));
+      recAntiGravity = Math.min(5000, Math.round(recAntiGravity * 1.15));
+    }
+
+    // 4. Punchout Drift / Anti-Gravity
+    if (symptoms.includes('punchout_drift')) {
+      diagnoses.push({
+        title: "Throttle Punchout Pitch Drift",
+        description: "Nose rises or dips during rapid full throttle bursts due to aerodynamic pitch moment.",
+        type: "warning"
+      });
+      recAntiGravity = Math.min(6000, Math.round(recAntiGravity * 1.35));
+      recPids.pitch.i = Math.round(recPids.pitch.i * 1.12);
+    }
+
+    // 5. High-Throttle Vibration / TPA
+    if (symptoms.includes('high_throttle_shudder')) {
+      diagnoses.push({
+        title: "High-Throttle Aerodynamic Flutter",
+        description: "Propeller thrust increases control authority at high throttle, driving high-frequency oscillations.",
+        type: "warning"
+      });
+      recTpaRate = 0.75;
+      recTpaBreakpoint = 1300;
+    }
+
+    // 6. Overall Master Multiplier Check
+    if (symptoms.includes('sluggish_mushy')) {
+      recMasterMultiplier = +(recMasterMultiplier * 1.12).toFixed(2);
+      diagnoses.push({
+        title: "Increased Master Authority",
+        description: "Boosting master multiplier to sharpen overall tracking response across all axes.",
+        type: "info"
+      });
+    }
+
+    // Construct Diff Table
+    this.addDiff(diffList, "Master Multiplier", current.masterMultiplier, recMasterMultiplier, "x", "Overall flight controller authority");
+    this.addDiff(diffList, "Roll P-Gain", current.pids.roll.p, recPids.roll.p, "", "Roll tracking speed");
+    this.addDiff(diffList, "Roll I-Gain", current.pids.roll.i, recPids.roll.i, "", "Roll steady-state attitude hold");
+    this.addDiff(diffList, "Roll D-Gain", current.pids.roll.d, recPids.roll.d, "", "Roll overshoot damping");
+    this.addDiff(diffList, "Roll D-Max", current.pids.roll.dMax, recPids.roll.dMax, "", "Dynamic D boost on fast roll flicks");
+    this.addDiff(diffList, "Roll Feedforward", current.pids.roll.f, recPids.roll.f, "", "Stick acceleration feedforward");
+
+    this.addDiff(diffList, "Pitch P-Gain", current.pids.pitch.p, recPids.pitch.p, "", "Pitch tracking speed");
+    this.addDiff(diffList, "Pitch I-Gain", current.pids.pitch.i, recPids.pitch.i, "", "Pitch steady-state attitude hold");
+    this.addDiff(diffList, "Pitch D-Gain", current.pids.pitch.d, recPids.pitch.d, "", "Pitch bounce-back damping");
+    this.addDiff(diffList, "Pitch D-Max", current.pids.pitch.dMax, recPids.pitch.dMax, "", "Dynamic D boost on rapid pitch flips");
+    this.addDiff(diffList, "Pitch Feedforward", current.pids.pitch.f, recPids.pitch.f, "", "Stick acceleration feedforward");
+
+    this.addDiff(diffList, "Yaw P-Gain", current.pids.yaw.p, recPids.yaw.p, "", "Yaw authority");
+    this.addDiff(diffList, "Yaw I-Gain", current.pids.yaw.i, recPids.yaw.i, "", "Yaw heading hold");
+    this.addDiff(diffList, "Yaw Feedforward", current.pids.yaw.f, recPids.yaw.f, "", "Yaw snap response");
+
+    this.addDiff(diffList, "Anti-Gravity Gain", current.antiGravity, recAntiGravity, "", "Throttle punch attitude stabilization");
+    this.addDiff(diffList, "TPA Rate", current.tpaRate, recTpaRate, "", "High-throttle D-term attenuation");
+    this.addDiff(diffList, "TPA Breakpoint", current.tpaBreakpoint, recTpaBreakpoint, "us", "Throttle threshold for TPA activation");
+    this.addDiff(diffList, "Gyro Filter Slider", current.gyroFilterSlider, recGyroSlider, "x", "Phase lag vs noise suppression");
+    this.addDiff(diffList, "D-Term Filter Slider", current.dtermFilterSlider, recDtermSlider, "x", "D-term noise filtering / motor heat");
+    this.addDiff(diffList, "Dynamic Idle (RPM)", current.dynamicIdle, recDynamicIdle, "00 RPM", "Prevents motor stalling in propwash");
+
+    // Overall Tune Health Score
+    let overallHealth = 88;
+    if (isHighNoise) overallHealth -= 30;
+    else if (isElevatedNoise) overallHealth -= 12;
+    if (pitchMetrics && pitchMetrics.overshootPercent > 18) overallHealth -= 15;
+    if (rollMetrics && rollMetrics.overshootPercent > 16) overallHealth -= 12;
+    if (symptoms.length > 0) overallHealth -= symptoms.length * 5;
+    overallHealth = Math.max(30, Math.min(98, overallHealth));
+
+    // Generate Betaflight CLI Script
+    const cliScript = this.generateCliScript({
+      quadName: baseline.name,
+      recPids,
+      recMasterMultiplier,
+      recAntiGravity,
+      recTpaRate,
+      recTpaBreakpoint,
+      recGyroSlider,
+      recDtermSlider,
+      recDynamicIdle
+    });
+
+    return {
+      overallHealth,
+      diagnoses,
+      warnings,
+      diffList,
+      recommendedConfig: {
+        pids: recPids,
+        masterMultiplier: recMasterMultiplier,
+        antiGravity: recAntiGravity,
+        tpaRate: recTpaRate,
+        tpaBreakpoint: recTpaBreakpoint,
+        gyroFilterSlider: recGyroSlider,
+        dtermFilterSlider: recDtermSlider,
+        dynamicIdle: recDynamicIdle
+      },
+      cliScript
+    };
+  }
+
+  addDiff(list, name, currentVal, recVal, unit, explanation) {
+    const delta = typeof currentVal === 'number' && typeof recVal === 'number' 
+      ? +(recVal - currentVal).toFixed(2) 
+      : 0;
+    const changed = delta !== 0;
+
+    list.push({
+      parameter: name,
+      current: currentVal,
+      recommended: recVal,
+      delta: delta > 0 ? `+${delta}` : `${delta}`,
+      unit: unit || '',
+      explanation: explanation,
+      changed: changed,
+      direction: delta > 0 ? 'increase' : delta < 0 ? 'decrease' : 'unchanged'
+    });
+  }
+
+  generateCliScript(rec) {
+    const lines = [
+      `# ======================================================`,
+      `# AeroPID Pro - Recommended Betaflight Tune`,
+      `# Profile: ${rec.quadName}`,
+      `# Generated automatically by Blackbox & Gyro Analysis`,
+      `# ======================================================`,
+      ``,
+      `# --- Master Multiplier ---`,
+      `set master_multiplier = ${rec.recMasterMultiplier}`,
+      ``,
+      `# --- Roll PID & Feedforward ---`,
+      `set p_roll = ${rec.recPids.roll.p}`,
+      `set i_roll = ${rec.recPids.roll.i}`,
+      `set d_roll = ${rec.recPids.roll.d}`,
+      `set f_roll = ${rec.recPids.roll.f}`,
+      `set d_max_roll = ${rec.recPids.roll.dMax}`,
+      ``,
+      `# --- Pitch PID & Feedforward ---`,
+      `set p_pitch = ${rec.recPids.pitch.p}`,
+      `set i_pitch = ${rec.recPids.pitch.i}`,
+      `set d_pitch = ${rec.recPids.pitch.d}`,
+      `set f_pitch = ${rec.recPids.pitch.f}`,
+      `set d_max_pitch = ${rec.recPids.pitch.dMax}`,
+      ``,
+      `# --- Yaw PID & Feedforward ---`,
+      `set p_yaw = ${rec.recPids.yaw.p}`,
+      `set i_yaw = ${rec.recPids.yaw.i}`,
+      `set d_yaw = ${rec.recPids.yaw.d}`,
+      `set f_yaw = ${rec.recPids.yaw.f}`,
+      ``,
+      `# --- Anti-Gravity & Throttle Attenuation ---`,
+      `set anti_gravity_gain = ${rec.recAntiGravity}`,
+      `set tpa_rate = ${Math.round(rec.recTpaRate * 100)}`,
+      `set tpa_breakpoint = ${rec.recTpaBreakpoint}`,
+      ``,
+      `# --- Filters & Dynamic Idle ---`,
+      `set dyn_idle_min_rpm = ${rec.recDynamicIdle * 100}`,
+      `# Note: In Betaflight Configurator Tuning Tab:`,
+      `# Set Gyro Filter Slider to: ${rec.recGyroSlider}x`,
+      `# Set D-Term Filter Slider to: ${rec.recDtermSlider}x`,
+      ``,
+      `save`
+    ];
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Parse Betaflight `diff all` or `dump` text directly
+   */
+  parseBetaflightDiff(diffText) {
+    if (!diffText) return null;
+    const lines = diffText.split(/\r?\n/);
+    const config = JSON.parse(JSON.stringify(this.defaultPresets['5in_freestyle_6s']));
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+
+      const match = line.match(/^set\s+([a-zA-Z0-9_]+)\s*=\s*([0-9.]+)/i);
+      if (match) {
+        const key = match[1].toLowerCase();
+        const val = parseFloat(match[2]);
+
+        // Map Betaflight CLI keys
+        if (key === 'master_multiplier') config.masterMultiplier = val;
+        else if (key === 'p_roll') config.pids.roll.p = Math.round(val);
+        else if (key === 'i_roll') config.pids.roll.i = Math.round(val);
+        else if (key === 'd_roll') config.pids.roll.d = Math.round(val);
+        else if (key === 'f_roll') config.pids.roll.f = Math.round(val);
+        else if (key === 'd_max_roll') config.pids.roll.dMax = Math.round(val);
+
+        else if (key === 'p_pitch') config.pids.pitch.p = Math.round(val);
+        else if (key === 'i_pitch') config.pids.pitch.i = Math.round(val);
+        else if (key === 'd_pitch') config.pids.pitch.d = Math.round(val);
+        else if (key === 'f_pitch') config.pids.pitch.f = Math.round(val);
+        else if (key === 'd_max_pitch') config.pids.pitch.dMax = Math.round(val);
+
+        else if (key === 'p_yaw') config.pids.yaw.p = Math.round(val);
+        else if (key === 'i_yaw') config.pids.yaw.i = Math.round(val);
+        else if (key === 'd_yaw') config.pids.yaw.d = Math.round(val);
+        else if (key === 'f_yaw') config.pids.yaw.f = Math.round(val);
+
+        else if (key === 'anti_gravity_gain') config.antiGravity = Math.round(val);
+        else if (key === 'tpa_rate') config.tpaRate = +(val > 1 ? val / 100 : val).toFixed(2);
+        else if (key === 'tpa_breakpoint') config.tpaBreakpoint = Math.round(val);
+        else if (key === 'dyn_idle_min_rpm') config.dynamicIdle = Math.round(val / 100);
+      }
+    }
+
+    return config;
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { TuningEngine };
+}
