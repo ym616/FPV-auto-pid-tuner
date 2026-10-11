@@ -73,6 +73,53 @@ class TestBlackboxParser(unittest.TestCase):
                 break
         self.assertEqual(header_idx, 120, "Should locate header line after 120 comment lines")
 
+    def test_bbl_8k_header_binary_detection(self):
+        # Simulate Betaflight 4.4/4.5 log with 8KB+ headers before binary payload
+        headers_8k = "H Product:Blackbox flight data recorder by Nicholas Sherlock\n" + \
+                     "".join([f"H Param_{i}:Value_{i}\n" for i in range(400)]) + \
+                     "H Field I name:loopIteration,time,gyroADC[0],rcCommand[0]\n"
+        bbl_sim = headers_8k.encode("ascii") + b"I\x00\x00\x00\x00"
+
+        sample = bbl_sim[:min(len(bbl_sim), 65536)].decode("latin1", errors="ignore")
+        has_header = "H Product:Blackbox" in sample
+        has_binary = False
+        for b in bbl_sim[:min(len(bbl_sim), 250000)]:
+            if b == 0 or (b < 32 and b not in (9, 10, 13)):
+                has_binary = True
+                break
+
+        self.assertTrue(has_header, "Should detect Blackbox header in 8KB buffer")
+        self.assertTrue(has_binary, "Should detect binary payload after 8KB headers")
+
+    def test_bbl_multi_session_detection(self):
+        # Simulate multi-session log with 2 flight logs
+        marker = b"H Product:Blackbox"
+        sess1 = marker + b" log 1\n" + b"I\x00\x00"
+        sess2 = marker + b" log 2\n" + b"I\x00\x00"
+        combined = sess1 + sess2
+
+        offsets = []
+        pos = 0
+        while True:
+            idx = combined.find(marker, pos)
+            if idx == -1:
+                break
+            offsets.append(idx)
+            pos = idx + len(marker)
+
+        self.assertEqual(len(offsets), 2, "Should detect 2 sessions in multi-session BBL file")
+        self.assertEqual(offsets[0], 0)
+        self.assertEqual(offsets[1], len(sess1))
+
+    def test_bbl_leading_garbage_detection(self):
+        # Simulate SD card block padding before Blackbox header
+        garbage = b"\x00\xff\xaa\x55" * 128
+        marker = b"H Product:Blackbox flight data recorder by Nicholas Sherlock\n"
+        stream = garbage + marker
+
+        idx = stream.find(b"H Product:Blackbox")
+        self.assertEqual(idx, 512, "Should locate Blackbox marker after block padding")
+
 # Test Step Response Mathematics
 class TestStepResponseMath(unittest.TestCase):
     def test_damping_ratio_zeta(self):

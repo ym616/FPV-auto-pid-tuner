@@ -1,7 +1,9 @@
 /**
- * AeroPID Pro - Universal Flight Log Parser
- * Directly decodes Betaflight Blackbox Binary logs (.BBL / .BFL)
- * and Betaflight Blackbox Explorer / Plasmatree CSV exports.
+ * AeroPID Pro - High Performance Flight Log Decoder
+ * Full native support for:
+ * 1. Betaflight Blackbox Binary logs (.bbl / .bfl, all revisions up to BF 4.5)
+ * 2. Multi-session Blackbox files (SD card & flash dumps with multiple flights)
+ * 3. Exported Blackbox CSV / telemetry files with arbitrary header depths & formats
  */
 
 class BlackboxParser {
@@ -12,100 +14,250 @@ class BlackboxParser {
   reset() {
     this.rawHeaders = [];
     this.columnMap = {};
-    this.sampleRate = 1000; // Hz
-    this.duration = 0; // seconds
-    this.totalSamples = 0;
+    this.metadata = {};
+    this.fileType = 'UNKNOWN'; // 'BBL_BINARY' or 'CSV_TEXT'
+    this.sessions = [];
+    this.sessionIndex = 0;
+    this.totalSessions = 1;
+
+    // Time-series telemetry arrays
     this.time = [];
     this.throttle = [];
+
     this.roll = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
     this.pitch = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
     this.yaw = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+
     this.motors = [[], [], [], []];
-    this.metadata = {};
-    this.fileType = 'unknown';
+
+    this.sampleRate = 1000; // Hz
+    this.duration = 0;      // seconds
+    this.totalSamples = 0;
   }
 
   /**
-   * Universal entry point: accepts ArrayBuffer, Uint8Array, or CSV string
-   * @param {ArrayBuffer|Uint8Array|string} input 
-   * @param {Function} progressCallback 
-   * @returns {Object} parsed flight data
+   * Unified parser entry point. Accepts ArrayBuffer, Uint8Array, or string.
+   * Automatically identifies binary BBL vs CSV text, with graceful fallback.
+   * @param {ArrayBuffer|Uint8Array|string} rawInput 
+   * @param {Function|null} progressCallback 
+   * @param {string} [filename='']
    */
-  parse(input, progressCallback = null) {
+  parse(rawInput, progressCallback = null, filename = '') {
     this.reset();
 
-    if (!input) {
-      throw new Error("No file content received.");
+    let uint8;
+    let isBinary = false;
+
+    if (rawInput instanceof ArrayBuffer) {
+      uint8 = new Uint8Array(rawInput);
+      isBinary = this.isBinaryBBL(uint8, filename);
+    } else if (rawInput instanceof Uint8Array) {
+      uint8 = rawInput;
+      isBinary = this.isBinaryBBL(uint8, filename);
+    } else if (typeof rawInput === 'string') {
+      isBinary = false;
+    } else {
+      throw new Error("Unsupported log format. Please upload a valid .bbl, .bfl, or .csv file.");
     }
 
-    // Determine whether input is binary (BBL) or text (CSV)
-    if (typeof input === 'string') {
-      return this.parseCSV(input, progressCallback);
-    }
-
-    const uint8 = input instanceof Uint8Array ? input : new Uint8Array(input);
-
-    // Detect if this is binary BBL or text CSV
-    if (this.isBinaryBBL(uint8)) {
+    // Try primary detection, with cross-format fallback
+    if (isBinary) {
       this.fileType = 'BBL_BINARY';
-      return this.parseBBL(uint8, progressCallback);
+      try {
+        return this.parseBBL(uint8, progressCallback);
+      } catch (bblErr) {
+        // Fallback: test if file was actually plain text CSV with unusual characters
+        try {
+          const textFallback = new TextDecoder('utf-8', { fatal: false }).decode(uint8);
+          this.reset();
+          this.fileType = 'CSV_TEXT';
+          return this.parseCSV(textFallback, progressCallback);
+        } catch {
+          // Re-throw original BBL error
+          throw bblErr;
+        }
+      }
     } else {
       this.fileType = 'CSV_TEXT';
-      const text = new TextDecoder('utf-8', { fatal: false }).decode(uint8);
-      return this.parseCSV(text, progressCallback);
+      const text = typeof rawInput === 'string'
+        ? rawInput
+        : new TextDecoder('utf-8', { fatal: false }).decode(uint8);
+
+      try {
+        return this.parseCSV(text, progressCallback);
+      } catch (csvErr) {
+        // Fallback: test if file was actually binary BBL with text-like header
+        if (uint8) {
+          try {
+            this.reset();
+            this.fileType = 'BBL_BINARY';
+            return this.parseBBL(uint8, progressCallback);
+          } catch {
+            throw csvErr;
+          }
+        }
+        throw csvErr;
+      }
     }
   }
 
   /**
-   * Check if a buffer contains binary Blackbox stream
+   * High-accuracy detection for Betaflight binary Blackbox stream.
+   * Handles modern logs with 10KB+ ASCII headers preceding binary payloads.
    */
-  isBinaryBBL(bytes) {
-    if (bytes.length < 16) return false;
+  isBinaryBBL(bytes, filename = '') {
+    if (!bytes || bytes.length < 16) return false;
 
-    // Check for "H Product:Blackbox" header
-    const headStr = String.fromCharCode.apply(null, Array.from(bytes.slice(0, 64)));
-    if (headStr.includes('H Product:Blackbox') || headStr.includes('H Data version')) {
-      // Check if after headers there are binary non-ASCII bytes
-      let hasBinary = false;
-      for (let i = 0; i < Math.min(bytes.length, 4096); i++) {
-        if (bytes[i] === 0 || (bytes[i] < 32 && bytes[i] !== 9 && bytes[i] !== 10 && bytes[i] !== 13)) {
-          hasBinary = true;
-          break;
+    // 1. Extension inspection
+    if (filename) {
+      const lowerName = filename.toLowerCase();
+      if (lowerName.endsWith('.bbl') || lowerName.endsWith('.bfl')) {
+        return true;
+      }
+      if (lowerName.endsWith('.csv') || lowerName.endsWith('.tsv') || lowerName.endsWith('.txt')) {
+        // Only override if file has null bytes
+        let hasNull = false;
+        const checkLimit = Math.min(bytes.length, 65536);
+        for (let i = 0; i < checkLimit; i++) {
+          if (bytes[i] === 0) { hasNull = true; break; }
+        }
+        if (!hasNull) return false;
+      }
+    }
+
+    // 2. Check for Blackbox header signature anywhere in the first 65KB
+    const sampleLimit = Math.min(bytes.length, 65536);
+    let sample = '';
+    for (let i = 0; i < sampleLimit; i++) {
+      sample += String.fromCharCode(bytes[i]);
+    }
+
+    const hasBlackboxHeader = sample.includes('H Product:Blackbox') ||
+                              sample.includes('H Data version') ||
+                              sample.includes('H Field I name');
+
+    if (hasBlackboxHeader) {
+      // In a real binary BBL file, binary frame bytes (0x00, high bits, control chars) exist.
+      // In an exported CSV from blackbox_decode, ALL content is text with commas and newlines.
+      const scanLimit = Math.min(bytes.length, 250000);
+      for (let i = 0; i < scanLimit; i++) {
+        const b = bytes[i];
+        if (b === 0 || (b < 32 && b !== 9 && b !== 10 && b !== 13)) {
+          return true; // Confirmed binary stream
         }
       }
-      return hasBinary;
+      return false; // Header exists, but pure printable CSV text
     }
 
-    // Fallback: search for null bytes indicating binary payload
-    for (let i = 0; i < Math.min(bytes.length, 2048); i++) {
+    // 3. Fallback: Check for null bytes indicating binary data
+    const nullScanLimit = Math.min(bytes.length, 65536);
+    for (let i = 0; i < nullScanLimit; i++) {
       if (bytes[i] === 0) return true;
     }
+
     return false;
   }
 
   // =========================================================================
-  // BINARY BLACKBOX (.BBL / .BFL) DECODER
+  // BETAFLIGHT BINARY (.BBL / .BFL) DECODER (FULL COMPATIBILITY)
   // =========================================================================
 
+  /**
+   * Find start offsets of all flight log sessions in the binary buffer.
+   */
+  findLogOffsets(bytes) {
+    const marker = [72, 32, 80, 114, 111, 100, 117, 99, 116, 58, 66, 108, 97, 99, 107, 98, 111, 120]; // "H Product:Blackbox"
+    const offsets = [];
+    const len = bytes.length;
+    const mLen = marker.length;
+
+    for (let i = 0; i <= len - mLen; i++) {
+      if (bytes[i] === 72 && bytes[i + 1] === 32) {
+        let match = true;
+        for (let j = 2; j < mLen; j++) {
+          if (bytes[i + j] !== marker[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          offsets.push(i);
+          i += mLen;
+        }
+      }
+    }
+
+    if (offsets.length === 0) {
+      // Fallback: look for "H "
+      for (let i = 0; i < Math.min(len, 8192); i++) {
+        if (bytes[i] === 72 && bytes[i + 1] === 32) {
+          offsets.push(i);
+          break;
+        }
+      }
+    }
+
+    return offsets.length > 0 ? offsets : [0];
+  }
+
+  /**
+   * Parse binary Blackbox stream supporting multi-session logs.
+   */
   parseBBL(bytes, progressCallback = null) {
-    const reader = new BBLByteReader(bytes);
+    const offsets = this.findLogOffsets(bytes);
+    this.totalSessions = offsets.length;
+
+    let bestSession = null;
+    let maxSamples = -1;
+
+    for (let sIdx = 0; sIdx < offsets.length; sIdx++) {
+      const startPos = offsets[sIdx];
+      const endPos = (sIdx + 1 < offsets.length) ? offsets[sIdx + 1] : bytes.length;
+
+      try {
+        const sessionResult = this.parseBBLSession(bytes, startPos, endPos, progressCallback);
+        if (sessionResult && sessionResult.totalSamples > maxSamples) {
+          maxSamples = sessionResult.totalSamples;
+          bestSession = {
+            index: sIdx + 1,
+            data: sessionResult
+          };
+        }
+      } catch (sessErr) {
+        // Continue to other sessions if one was truncated
+        console.warn(`BBL session ${sIdx + 1} parse issue:`, sessErr);
+      }
+    }
+
+    if (!bestSession || maxSamples < 20) {
+      throw new Error(`Insufficient valid flight data decoded from BBL file (${maxSamples > 0 ? maxSamples : 0} frames found).`);
+    }
+
+    this.sessionIndex = bestSession.index;
+    return this.getDataSummary();
+  }
+
+  /**
+   * Decode an individual flight session from startOffset to endOffset.
+   */
+  parseBBLSession(bytes, startOffset, endOffset, progressCallback = null) {
+    this.resetTelemetryArrays();
+    const reader = new BBLByteReader(bytes, startOffset, endOffset);
 
     // 1. Parse ASCII headers
     const headerInfo = this.parseBBLHeaders(reader);
     this.metadata = headerInfo.metadata;
 
     const frameDefI = headerInfo.frames['I'];
-    const frameDefP = headerInfo.frames['P'];
-
     if (!frameDefI) {
-      throw new Error("Invalid BBL file: Missing Intra-frame (Field I) definitions in Blackbox header.");
+      throw new Error("Missing Intra-frame (Field I) definitions in Blackbox header.");
     }
 
     // Map column indices for Field I
     this.mapBBLColumns(frameDefI.names);
 
-    // Fallback frameDefP fields if not specified separately
-    if (!frameDefP) {
+    // Fallback frameDefP fields if not separately provided
+    if (!headerInfo.frames['P']) {
       headerInfo.frames['P'] = frameDefI;
     }
 
@@ -115,7 +267,7 @@ class BlackboxParser {
     const looptime = parseInt(this.metadata['looptime'] || '1000', 10);
     this.sampleRate = looptime > 0 ? Math.round(1e6 / looptime) : 1000;
 
-    // Main frame loop state
+    // Frame state
     let previous = null;
     let previous2 = null;
     let lastMainTime = 0;
@@ -136,11 +288,12 @@ class BlackboxParser {
     }
 
     let parsedRows = 0;
-    const totalBytes = bytes.length;
+    const sessionBytes = endOffset - startOffset;
 
     while (!reader.eof()) {
-      const frameStart = reader.pos;
       const kindByte = reader.readByte();
+      if (kindByte === 0) continue; // Skip padding
+
       const kind = String.fromCharCode(kindByte);
 
       // Event frame
@@ -149,16 +302,16 @@ class BlackboxParser {
         if (eventCode === 255) { // Log End
           break;
         }
-        // Skip rest of event based on code
         if (eventCode === 0) reader.readUnsignedVB(); // sync beep
+        else if (eventCode === 10) reader.readSignedVB(); // gtune
         else if (eventCode === 13) { reader.readByte(); reader.readSignedVB(); } // inflight adjustment
-        else if (eventCode === 14) reader.readUnsignedVB(); // logging resume
-        else if (eventCode === 15) reader.readByte(); // disarm reason
+        else if (eventCode === 14) { reader.readUnsignedVB(); reader.readUnsignedVB(); } // logging resume
+        else if (eventCode === 15) reader.readUnsignedVB(); // disarm reason
         else if (eventCode === 30) { reader.readUnsignedVB(); reader.readUnsignedVB(); } // flight mode
         continue;
       }
 
-      // Check if main frame (I or P)
+      // Check for main frame
       if (kind !== 'I' && kind !== 'P') {
         // Skip slow or GPS frames
         if (kind === 'S' || kind === 'G' || kind === 'H') {
@@ -166,13 +319,14 @@ class BlackboxParser {
           if (def) {
             try {
               this.decodeBBLFieldValues(reader, def, null, null, dataVersion, minThrottle, vbatRef, 0, this.columnMap.motor0);
-            } catch (e) {
+            } catch {
               // Ignore slow frame decode error
             }
           }
           continue;
         }
-        // Desynchronized byte: scan forward for next 'I' frame marker
+
+        // Resync: search forward for next 'I' frame marker
         let foundResync = false;
         while (!reader.eof()) {
           if (reader.peekByte() === 73) { // ASCII 'I'
@@ -189,11 +343,10 @@ class BlackboxParser {
       if (!frameDef) continue;
 
       if (kind === 'P' && !previous) {
-        // Cannot decode P-frame without preceding I-frame
-        continue;
+        continue; // Cannot decode P-frame without preceding I-frame
       }
 
-      // Calculate skipped frames for increment predictor
+      // Skipped frames calculation
       skippedFrames = 0;
       if (kind === 'P' && lastMainIteration !== null) {
         let it = lastMainIteration + 1;
@@ -216,8 +369,8 @@ class BlackboxParser {
           skippedFrames,
           this.columnMap.motor0
         );
-      } catch (err) {
-        // Frame decoding error: scan forward for next 'I' frame
+      } catch {
+        // Decode error: skip forward to next 'I' frame
         while (!reader.eof()) {
           if (reader.peekByte() === 73) break;
           reader.pos++;
@@ -238,7 +391,6 @@ class BlackboxParser {
         if (rawTime < prevRaw && ((rawTime - prevRaw) & 0xFFFFFFFF) < MAX_TIME_JUMP) {
           timeRollover += 0x100000000;
         }
-        // Sanity check frame jump
         const unwrapT = rawTime + timeRollover;
         if (unwrapT < lastMainTime || (unwrapT - lastMainTime) > MAX_TIME_JUMP) {
           continue;
@@ -251,7 +403,7 @@ class BlackboxParser {
       lastMainTime = rawTime;
       lastMainIteration = rawIter;
 
-      // Roll frame history
+      // Roll history
       if (kind === 'I') {
         previous = rowValues;
         previous2 = rowValues;
@@ -260,7 +412,7 @@ class BlackboxParser {
         previous = rowValues;
       }
 
-      // Store in parsed telemetry arrays
+      // Store telemetry
       this.time.push(rawTime / 1e6); // us to seconds
       this.throttle.push(this.getBBLVal(rowValues, this.columnMap.throttle, 1000));
 
@@ -293,40 +445,56 @@ class BlackboxParser {
 
       parsedRows++;
       if (progressCallback && parsedRows % 5000 === 0) {
-        progressCallback(reader.pos / totalBytes);
+        progressCallback((reader.pos - startOffset) / sessionBytes);
       }
     }
 
     this.finalizeParsedTelemetry();
-    return this.getDataSummary();
+    return {
+      totalSamples: this.totalSamples,
+      duration: this.duration,
+      sampleRate: this.sampleRate
+    };
   }
 
   parseBBLHeaders(reader) {
     const rawMeta = {};
     const frames = {};
-    const headerLines = [];
-
-    // Temporary storage for field attributes
     const fieldAttrs = {};
 
+    // Seek to first header line ('H')
     while (!reader.eof()) {
-      const lineStart = reader.pos;
-      if (reader.peekByte() !== 72) { // ASCII 'H'
-        reader.pos = lineStart;
-        break;
-      }
-      reader.readByte(); // 'H'
-      if (reader.peekByte() === 32) reader.readByte(); // ' '
+      if (reader.peekByte() === 72) break; // 'H'
+      reader.readByte();
+    }
 
-      // Read line until \n
+    while (!reader.eof()) {
+      // Skip empty line characters
+      while (!reader.eof() && (reader.peekByte() === 10 || reader.peekByte() === 13 || reader.peekByte() === 32)) {
+        reader.readByte();
+      }
+
+      if (reader.eof()) break;
+
+      // Check if header line starts with 'H '
+      if (reader.peekByte() !== 72) { // Not 'H'
+        // If it starts with a data frame marker ('I', 'P', 'E', 'S', 'G'), the header is done
+        const nextB = reader.peekByte();
+        if (nextB === 73 || nextB === 80 || nextB === 69 || nextB === 83 || nextB === 71) {
+          break;
+        }
+      }
+
+      reader.readByte(); // Read 'H'
+      if (reader.peekByte() === 32) reader.readByte(); // Read space
+
+      // Read line until newline
       let lineStr = '';
       while (!reader.eof()) {
         const b = reader.readByte();
-        if (b === 10) break; // \n
-        if (b !== 13) lineStr += String.fromCharCode(b); // ignore \r
+        if (b === 10) break;
+        if (b !== 13) lineStr += String.fromCharCode(b);
       }
-
-      headerLines.push(lineStr);
 
       const colonIdx = lineStr.indexOf(':');
       if (colonIdx === -1) continue;
@@ -337,7 +505,7 @@ class BlackboxParser {
       const metaKey = key.toLowerCase().replace(/[:\s]/g, '_');
       rawMeta[metaKey] = val;
 
-      // Check field definitions: e.g. "Field I name" or "Field P predictor"
+      // Extract field definitions: e.g. "Field I name" or "Field P predictor"
       const fieldMatch = key.match(/^Field\s+([A-Z])\s+(name|signed|predictor|encoding)$/i);
       if (fieldMatch) {
         const kind = fieldMatch[1].toUpperCase();
@@ -408,6 +576,8 @@ class BlackboxParser {
         group = reader.readTag2_3S32();
       } else if (enc === 8) { // TAG8_4S16
         group = reader.readTag8_4S16(dataVersion);
+      } else if (enc === 10) { // TAG2_3SVARIABLE
+        group = reader.readTag2_3SVariable();
       } else {
         group = [reader.readSignedVB()];
       }
@@ -427,8 +597,7 @@ class BlackboxParser {
           else if (previous) val += previous[pos];
         } else if (pred === 3) { // AVERAGE_2
           if (previous && previous2) {
-            const tot = previous[pos] + previous2[pos];
-            val += (tot / 2) | 0; // integer truncation toward 0
+            val += ((previous[pos] + previous2[pos]) / 2) | 0;
           } else if (previous) {
             val += previous[pos];
           }
@@ -447,7 +616,6 @@ class BlackboxParser {
           }
         }
 
-        // Mask 32-bit register
         val = val | 0;
         values[pos] = field.signed ? val : (val >>> 0);
       }
@@ -464,7 +632,7 @@ class BlackboxParser {
   }
 
   // =========================================================================
-  // ROBUST CSV PARSER
+  // ROBUST CSV PARSER (ALL EXPORTS & SPREADSHEETS)
   // =========================================================================
 
   parseCSV(csvText, progressCallback = null) {
@@ -472,7 +640,7 @@ class BlackboxParser {
       throw new Error("Invalid or empty CSV log data.");
     }
 
-    // Strip Byte Order Mark (BOM) if present
+    // Strip Byte Order Mark (BOM)
     if (csvText.charCodeAt(0) === 0xFEFF) {
       csvText = csvText.slice(1);
     }
@@ -485,8 +653,8 @@ class BlackboxParser {
     let headerIndex = -1;
     let delimiter = ',';
 
-    // Scan through all initial lines without artificial 60-line cap!
-    const scanLimit = Math.min(lines.length, 300);
+    // Scan initial lines for column header without artificial caps
+    const scanLimit = Math.min(lines.length, 500);
     for (let i = 0; i < scanLimit; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -496,7 +664,7 @@ class BlackboxParser {
         continue;
       }
 
-      // Check delimiters
+      // Check delimiter density
       const commaCount = (line.match(/,/g) || []).length;
       const tabCount = (line.match(/\t/g) || []).length;
       const semiCount = (line.match(/;/g) || []).length;
@@ -508,11 +676,12 @@ class BlackboxParser {
 
         const cols = line.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''));
 
-        // Flexible header detection: looks for time, gyro, rate, or loopIteration
+        // Header detection: time, gyro, rate, loopiteration, rccommand, axis
         const isHeader = cols.some(c => {
           const l = c.toLowerCase();
           return l.includes('time') || l.includes('gyro') || l.includes('rate') ||
-                 l.includes('loopiteration') || l.includes('rccommand') || l.includes('setpoint');
+                 l.includes('loopiteration') || l.includes('rccommand') || l.includes('setpoint') ||
+                 l.includes('axisp') || l.includes('axispid');
         });
 
         if (isHeader) {
@@ -549,7 +718,6 @@ class BlackboxParser {
     let prevTimeUs = null;
     const timeDeltas = [];
 
-    // Fallback looptime if time is missing
     const defaultLooptimeUs = parseInt(this.metadata['looptime'] || '1000', 10);
 
     for (let i = 0; i < totalLines; i++) {
@@ -559,41 +727,51 @@ class BlackboxParser {
       const parts = line.split(delimiter);
       if (parts.length < 3) continue;
 
-      // Extract time with complete fallback logic
-      let timeSec = 0;
-      let rawTimeVal = null;
-
+      // Extract time
+      let tVal = null;
       if (this.columnMap.time !== undefined && parts[this.columnMap.time] !== undefined && parts[this.columnMap.time].trim() !== '') {
-        rawTimeVal = parseFloat(parts[this.columnMap.time]);
-      } else if (this.columnMap.iteration !== undefined && parts[this.columnMap.iteration]) {
-        // Derive timestamp from loopIteration!
+        const parsedT = parseFloat(parts[this.columnMap.time]);
+        if (!isNaN(parsedT)) {
+          tVal = parsedT;
+        }
+      }
+
+      // Fallback 1: Derive time from loopIteration
+      if (tVal === null && this.columnMap.iteration !== undefined && parts[this.columnMap.iteration]) {
         const iter = parseFloat(parts[this.columnMap.iteration]);
         if (!isNaN(iter)) {
-          rawTimeVal = iter * defaultLooptimeUs;
+          tVal = iter * defaultLooptimeUs;
         }
       }
 
-      if (rawTimeVal === null || isNaN(rawTimeVal)) {
-        // Monotonic synthesis fallback: never fail with "no timestamp" error!
-        rawTimeVal = i * defaultLooptimeUs;
+      // Fallback 2: Row sequence
+      if (tVal === null) {
+        tVal = this.time.length * defaultLooptimeUs;
       }
 
-      // Detect time unit (microseconds vs milliseconds vs seconds)
-      const timeHeaderStr = this.columnMap.time !== undefined ? (this.rawHeaders[this.columnMap.time] || '') : '';
-      if (/us|micro/i.test(timeHeaderStr) || rawTimeVal > 1e6) {
-        timeSec = rawTimeVal / 1e6;
-        if (prevTimeUs !== null && rawTimeVal > prevTimeUs && timeDeltas.length < 200) {
-          timeDeltas.push(rawTimeVal - prevTimeUs);
+      // Convert time to seconds
+      let timeSec = 0;
+      const isHeaderMicroseconds = this.columnMap.time !== undefined &&
+        /us|micro/i.test(this.rawHeaders[this.columnMap.time] || '');
+
+      if (tVal > 1e6 || isHeaderMicroseconds) {
+        timeSec = tVal / 1e6;
+        if (prevTimeUs !== null && tVal > prevTimeUs && timeDeltas.length < 500) {
+          timeDeltas.push(tVal - prevTimeUs);
         }
-        prevTimeUs = rawTimeVal;
-      } else if (/ms|milli/i.test(timeHeaderStr) || (rawTimeVal > 500 && rawTimeVal <= 1e6)) {
-        timeSec = rawTimeVal / 1000;
-        if (prevTimeUs !== null && rawTimeVal > prevTimeUs && timeDeltas.length < 200) {
-          timeDeltas.push((rawTimeVal - prevTimeUs) * 1000);
+        prevTimeUs = tVal;
+      } else if (tVal > 1000 && !isHeaderMicroseconds) {
+        timeSec = tVal / 1000;
+        if (prevTimeUs !== null && tVal > prevTimeUs && timeDeltas.length < 500) {
+          timeDeltas.push((tVal - prevTimeUs) * 1000);
         }
-        prevTimeUs = rawTimeVal;
+        prevTimeUs = tVal;
       } else {
-        timeSec = rawTimeVal;
+        timeSec = tVal;
+        if (prevTimeUs !== null && tVal > prevTimeUs && timeDeltas.length < 500) {
+          timeDeltas.push((tVal - prevTimeUs) * 1e6);
+        }
+        prevTimeUs = tVal;
       }
 
       this.time.push(timeSec);
@@ -606,33 +784,33 @@ class BlackboxParser {
       this.throttle.push(th);
 
       // Roll
-      this.roll.setpoint.push(this.getCSVVal(parts, this.columnMap.rollSetpoint));
-      this.roll.gyro.push(this.getCSVVal(parts, this.columnMap.rollGyro));
-      this.roll.p.push(this.getCSVVal(parts, this.columnMap.rollP));
-      this.roll.i.push(this.getCSVVal(parts, this.columnMap.rollI));
-      this.roll.d.push(this.getCSVVal(parts, this.columnMap.rollD));
-      this.roll.f.push(this.getCSVVal(parts, this.columnMap.rollF));
+      this.roll.setpoint.push(this.getVal(parts, this.columnMap.rollSetpoint));
+      this.roll.gyro.push(this.getVal(parts, this.columnMap.rollGyro));
+      this.roll.p.push(this.getVal(parts, this.columnMap.rollP));
+      this.roll.i.push(this.getVal(parts, this.columnMap.rollI));
+      this.roll.d.push(this.getVal(parts, this.columnMap.rollD));
+      this.roll.f.push(this.getVal(parts, this.columnMap.rollF));
 
       // Pitch
-      this.pitch.setpoint.push(this.getCSVVal(parts, this.columnMap.pitchSetpoint));
-      this.pitch.gyro.push(this.getCSVVal(parts, this.columnMap.pitchGyro));
-      this.pitch.p.push(this.getCSVVal(parts, this.columnMap.pitchP));
-      this.pitch.i.push(this.getCSVVal(parts, this.columnMap.pitchI));
-      this.pitch.d.push(this.getCSVVal(parts, this.columnMap.pitchD));
-      this.pitch.f.push(this.getCSVVal(parts, this.columnMap.pitchF));
+      this.pitch.setpoint.push(this.getVal(parts, this.columnMap.pitchSetpoint));
+      this.pitch.gyro.push(this.getVal(parts, this.columnMap.pitchGyro));
+      this.pitch.p.push(this.getVal(parts, this.columnMap.pitchP));
+      this.pitch.i.push(this.getVal(parts, this.columnMap.pitchI));
+      this.pitch.d.push(this.getVal(parts, this.columnMap.pitchD));
+      this.pitch.f.push(this.getVal(parts, this.columnMap.pitchF));
 
       // Yaw
-      this.yaw.setpoint.push(this.getCSVVal(parts, this.columnMap.yawSetpoint));
-      this.yaw.gyro.push(this.getCSVVal(parts, this.columnMap.yawGyro));
-      this.yaw.p.push(this.getCSVVal(parts, this.columnMap.yawP));
-      this.yaw.i.push(this.getCSVVal(parts, this.columnMap.yawI));
-      this.yaw.d.push(this.getCSVVal(parts, this.columnMap.yawD));
-      this.yaw.f.push(this.getCSVVal(parts, this.columnMap.yawF));
+      this.yaw.setpoint.push(this.getVal(parts, this.columnMap.yawSetpoint));
+      this.yaw.gyro.push(this.getVal(parts, this.columnMap.yawGyro));
+      this.yaw.p.push(this.getVal(parts, this.columnMap.yawP));
+      this.yaw.i.push(this.getVal(parts, this.columnMap.yawI));
+      this.yaw.d.push(this.getVal(parts, this.columnMap.yawD));
+      this.yaw.f.push(this.getVal(parts, this.columnMap.yawF));
 
       // Motors
       for (let m = 0; m < 4; m++) {
         if (this.columnMap[`motor${m}`] !== undefined) {
-          this.motors[m].push(parseFloat(parts[this.columnMap[`motor${m}`]]) || 1000);
+          this.motors[m].push(parseFloat(parts[this.columnMap[`motor${m}`]]) || 0);
         }
       }
 
@@ -641,42 +819,14 @@ class BlackboxParser {
       }
     }
 
-    if (timeDeltas.length > 10) {
-      const avgDeltaUs = timeDeltas.reduce((a, b) => a + b, 0) / timeDeltas.length;
-      if (avgDeltaUs > 0) {
-        this.sampleRate = Math.round(1e6 / avgDeltaUs);
-      }
-    }
-
-    this.finalizeParsedTelemetry();
+    this.finalizeParsedTelemetry(timeDeltas);
     return this.getDataSummary();
   }
 
-  getCSVVal(parts, colIdx, defaultVal = 0) {
-    if (colIdx === undefined || colIdx === null || !parts[colIdx]) return defaultVal;
+  getVal(parts, colIdx) {
+    if (colIdx === undefined || colIdx === null || !parts[colIdx]) return 0;
     const v = parseFloat(parts[colIdx]);
-    return isNaN(v) ? defaultVal : v;
-  }
-
-  finalizeParsedTelemetry() {
-    this.totalSamples = this.time.length;
-    if (this.totalSamples === 0) {
-      throw new Error("No data samples could be parsed from the log.");
-    }
-
-    // Normalize time to start at 0.0s
-    const startT = this.time[0] || 0;
-    for (let i = 0; i < this.totalSamples; i++) {
-      this.time[i] = +(this.time[i] - startT).toFixed(5);
-    }
-    this.duration = +(this.time[this.totalSamples - 1]).toFixed(2);
-
-    if (this.duration > 0 && (!this.sampleRate || this.sampleRate <= 0)) {
-      this.sampleRate = Math.round(this.totalSamples / this.duration);
-    }
-    if (!this.sampleRate || this.sampleRate <= 0) {
-      this.sampleRate = 1000;
-    }
+    return isNaN(v) ? 0 : v;
   }
 
   parseHeaderComment(line) {
@@ -684,6 +834,42 @@ class BlackboxParser {
     if (match) {
       const key = match[1].toLowerCase().replace(/[:\s]/g, '_');
       this.metadata[key] = match[2].trim();
+    }
+  }
+
+  resetTelemetryArrays() {
+    this.time = [];
+    this.throttle = [];
+    this.roll = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.pitch = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.yaw = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.motors = [[], [], [], []];
+  }
+
+  finalizeParsedTelemetry(timeDeltas = []) {
+    this.totalSamples = this.time.length;
+    if (this.totalSamples < 20) {
+      throw new Error(`Insufficient flight rows parsed (${this.totalSamples} rows found).`);
+    }
+
+    // Normalize time to start at 0.000s
+    const startT = this.time[0];
+    for (let i = 0; i < this.totalSamples; i++) {
+      this.time[i] = +(this.time[i] - startT).toFixed(5);
+    }
+    this.duration = +(this.time[this.totalSamples - 1]).toFixed(2);
+
+    // Compute effective sample rate
+    if (timeDeltas && timeDeltas.length > 10) {
+      const avgDeltaUs = timeDeltas.reduce((a, b) => a + b, 0) / timeDeltas.length;
+      if (avgDeltaUs > 0) {
+        this.sampleRate = Math.round(1e6 / avgDeltaUs);
+      }
+    } else if (this.duration > 0 && this.totalSamples > 0) {
+      this.sampleRate = Math.round(this.totalSamples / this.duration);
+    } else {
+      const loopUs = parseInt(this.metadata['looptime'] || '1000', 10);
+      this.sampleRate = loopUs > 0 ? Math.round(1e6 / loopUs) : 1000;
     }
   }
 
@@ -745,19 +931,19 @@ class BlackboxParser {
       }
 
       // PID Terms Roll
-      if (/axisp\[0\]|roll_p|p_roll/i.test(lower)) colMap.rollP = idx;
+      if (/axisp\[0\]|axispid\[0\]|roll_p|p_roll/i.test(lower)) colMap.rollP = idx;
       else if (/axisi\[0\]|roll_i|i_roll/i.test(lower)) colMap.rollI = idx;
       else if (/axisd\[0\]|roll_d|d_roll/i.test(lower)) colMap.rollD = idx;
       else if (/axisf\[0\]|roll_f|f_roll/i.test(lower)) colMap.rollF = idx;
 
       // PID Terms Pitch
-      if (/axisp\[1\]|pitch_p|p_pitch/i.test(lower)) colMap.pitchP = idx;
+      if (/axisp\[1\]|axispid\[1\]|pitch_p|p_pitch/i.test(lower)) colMap.pitchP = idx;
       else if (/axisi\[1\]|pitch_i|i_pitch/i.test(lower)) colMap.pitchI = idx;
       else if (/axisd\[1\]|pitch_d|d_pitch/i.test(lower)) colMap.pitchD = idx;
       else if (/axisf\[1\]|pitch_f|f_pitch/i.test(lower)) colMap.pitchF = idx;
 
       // PID Terms Yaw
-      if (/axisp\[2\]|yaw_p|p_yaw/i.test(lower)) colMap.yawP = idx;
+      if (/axisp\[2\]|axispid\[2\]|yaw_p|p_yaw/i.test(lower)) colMap.yawP = idx;
       else if (/axisi\[2\]|yaw_i|i_yaw/i.test(lower)) colMap.yawI = idx;
       else if (/axisd\[2\]|yaw_d|d_yaw/i.test(lower)) colMap.yawD = idx;
       else if (/axisf\[2\]|yaw_f|f_yaw/i.test(lower)) colMap.yawF = idx;
@@ -775,6 +961,8 @@ class BlackboxParser {
   getDataSummary() {
     return {
       fileType: this.fileType,
+      sessionIndex: this.sessionIndex,
+      totalSessions: this.totalSessions,
       sampleRate: this.sampleRate,
       duration: this.duration,
       totalSamples: this.totalSamples,
@@ -792,26 +980,27 @@ class BlackboxParser {
 }
 
 // =========================================================================
-// BBL BINARY HELPER CLASSES
+// BBL BINARY HELPER CLASSES & BITWISE CODECS
 // =========================================================================
 
 class BBLByteReader {
-  constructor(data) {
+  constructor(data, start = 0, end = null) {
     this.data = data instanceof Uint8Array ? data : new Uint8Array(data);
-    this.pos = 0;
+    this.pos = start;
+    this.end = (end === null || end === undefined) ? this.data.length : end;
   }
 
   eof() {
-    return this.pos >= this.data.length;
+    return this.pos >= this.end;
   }
 
   readByte() {
-    if (this.pos >= this.data.length) return 0;
+    if (this.pos >= this.end) return 0;
     return this.data[this.pos++];
   }
 
   peekByte() {
-    if (this.pos >= this.data.length) return 0;
+    if (this.pos >= this.end) return 0;
     return this.data[this.pos];
   }
 
@@ -832,9 +1021,7 @@ class BBLByteReader {
 
   readNeg14Bit() {
     const val = this.readUnsignedVB();
-    const signBit = 1 << 13;
-    const ext = (val & (signBit - 1)) - (val & signBit);
-    return -ext;
+    return -this.signExtend(val, 14);
   }
 
   readTag8_8SVB(count) {
@@ -882,9 +1069,50 @@ class BBLByteReader {
     return values;
   }
 
+  readTag2_3SVariable() {
+    const lead = this.readByte();
+    const selector = lead >>> 6;
+    if (selector === 0) {
+      return [
+        this.signExtend((lead >>> 4) & 0x03, 2),
+        this.signExtend((lead >>> 2) & 0x03, 2),
+        this.signExtend(lead & 0x03, 2)
+      ];
+    }
+    if (selector === 1) {
+      const byte2 = this.readByte();
+      return [
+        this.signExtend((lead & 0x3E) >>> 1, 5),
+        this.signExtend(((lead & 0x01) << 5) | ((byte2 & 0xF0) >>> 4), 5),
+        this.signExtend(byte2 & 0x0F, 4)
+      ];
+    }
+    if (selector === 2) {
+      const byte2 = this.readByte();
+      const byte3 = this.readByte();
+      return [
+        this.signExtend(((lead & 0x3F) << 2) | ((byte2 & 0xC0) >>> 6), 8),
+        this.signExtend(((byte2 & 0x3F) << 1) | ((byte2 & 0x80) >>> 7), 7),
+        this.signExtend(byte3 & 0x7F, 7)
+      ];
+    }
+    const values = [];
+    let l = lead;
+    for (let i = 0; i < 3; i++) {
+      const width = l & 0x03;
+      if (width === 0) values.push(this.signExtend(this.readByte(), 8));
+      else if (width === 1) values.push(this.signExtend(this._readLE(2), 16));
+      else if (width === 2) values.push(this.signExtend(this._readLE(3), 24));
+      else values.push(this.signExtend(this._readLE(4), 32));
+      l >>>= 2;
+    }
+    return values;
+  }
+
   readTag8_4S16(dataVersion) {
     const selector = this.readByte();
     const values = [0, 0, 0, 0];
+
     if (dataVersion < 2) {
       let sel = selector;
       let i = 0;
@@ -910,39 +1138,43 @@ class BBLByteReader {
       return values;
     }
 
+    // Modern Betaflight v2 nibble-packed decoder
     let sel = selector;
     let buffer = 0;
-    let half = false;
+    let nibbleIndex = 0;
+
     for (let i = 0; i < 4; i++) {
       const width = sel & 0x03;
       if (width === 0) {
         values[i] = 0;
       } else if (width === 1) {
-        if (!half) {
+        if (nibbleIndex === 0) {
           buffer = this.readByte();
           values[i] = this.signExtend(buffer >>> 4, 4);
-          half = true;
+          nibbleIndex = 1;
         } else {
           values[i] = this.signExtend(buffer & 0x0F, 4);
-          half = false;
+          nibbleIndex = 0;
         }
       } else if (width === 2) {
-        if (!half) {
+        if (nibbleIndex === 0) {
           values[i] = this.signExtend(this.readByte(), 8);
         } else {
-          const byte = ((buffer << 4) & 0xFF) | (this.peekByte() >>> 4);
+          let char1 = (buffer & 0x0F) << 4;
           buffer = this.readByte();
-          values[i] = this.signExtend(byte, 8);
+          char1 |= buffer >>> 4;
+          values[i] = this.signExtend(char1, 8);
         }
       } else {
-        if (!half) {
-          values[i] = this.signExtend(this._readBE(2), 16);
+        if (nibbleIndex === 0) {
+          const char1 = this.readByte();
+          const char2 = this.readByte();
+          values[i] = this.signExtend((char1 << 8) | char2, 16);
         } else {
-          const b1 = ((buffer << 4) & 0xFF) | (this.peekByte() >>> 4);
-          buffer = this.readByte();
-          const b2 = ((buffer << 4) & 0xFF) | (this.peekByte() >>> 4);
-          buffer = this.readByte();
-          values[i] = this.signExtend((b1 << 8) | b2, 16);
+          const char1 = this.readByte();
+          const char2 = this.readByte();
+          values[i] = this.signExtend(((buffer & 0x0F) << 12) | (char1 << 4) | (char2 >>> 4), 16);
+          buffer = char2;
         }
       }
       sel >>>= 2;
@@ -961,14 +1193,6 @@ class BBLByteReader {
       val |= (this.readByte() << s);
     }
     return val >>> 0;
-  }
-
-  _readBE(bytes) {
-    let val = 0;
-    for (let i = 0; i < bytes; i++) {
-      val = (val << 8) | this.readByte();
-    }
-    return val;
   }
 }
 

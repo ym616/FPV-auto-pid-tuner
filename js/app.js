@@ -188,16 +188,17 @@ class AeroPIDApp {
     reader.onload = (e) => {
       try {
         const buffer = e.target.result;
-        this.parser.parse(buffer);
+        this.parser.parse(buffer, null, file.name);
         this.currentData = this.parser.getDataSummary();
         this.updateHeaderStats(file.name);
         this.analyzeAndRecommend();
-        const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox BBL' : 'CSV';
-        this.showToast(`Loaded ${typeLabel} log successfully!`);
+        const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox Binary (.bbl)' : 'CSV';
+        const sessionInfo = this.currentData.totalSessions > 1 ? ` [Flight ${this.currentData.sessionIndex} of ${this.currentData.totalSessions}]` : '';
+        this.showToast(`Loaded ${typeLabel}${sessionInfo} successfully!`);
       } catch (err) {
         console.error(err);
         this.setStatus('Parse error', 'danger');
-        alert(`Failed to parse file: ${err.message}`);
+        alert(`Failed to parse file: ${err.message}\n\nPlease verify that this file is an authentic Betaflight Blackbox log (.bbl / .bfl) or a telemetry CSV.`);
       }
     };
 
