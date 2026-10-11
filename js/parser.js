@@ -15,6 +15,7 @@ class BlackboxParser {
     this.rawHeaders = [];
     this.columnMap = {};
     this.metadata = {};
+    this.gyroScale = 1.0;
     this.fileType = 'UNKNOWN'; // 'BBL_BINARY' or 'CSV_TEXT'
     this.sessions = [];
     this.sessionIndex = 0;
@@ -267,6 +268,19 @@ class BlackboxParser {
     const looptime = parseInt(this.metadata['looptime'] || '1000', 10);
     this.sampleRate = looptime > 0 ? Math.round(1e6 / looptime) : 1000;
 
+    // Parse gyroScale from header (e.g., gyro.scale:0x3d79c190)
+    let gyroScale = 1.0;
+    const gyroScaleRaw = this.metadata['gyro_scale'] || this.metadata['gyro.scale'] || '';
+    if (gyroScaleRaw) {
+      if (gyroScaleRaw.startsWith('0x') || gyroScaleRaw.startsWith('0X')) {
+        gyroScale = this.hexToFloat(gyroScaleRaw);
+      } else {
+        const pf = parseFloat(gyroScaleRaw);
+        if (!isNaN(pf) && pf > 0) gyroScale = pf;
+      }
+    }
+    this.gyroScale = gyroScale;
+
     // Frame state
     let previous = null;
     let previous2 = null;
@@ -416,22 +430,32 @@ class BlackboxParser {
       this.time.push(rawTime / 1e6); // us to seconds
       this.throttle.push(this.getBBLVal(rowValues, this.columnMap.throttle, 1000));
 
-      this.roll.setpoint.push(this.getBBLVal(rowValues, this.columnMap.rollSetpoint, 0));
-      this.roll.gyro.push(this.getBBLVal(rowValues, this.columnMap.rollGyro, 0));
+      const rawRollGyro = this.getBBLVal(rowValues, this.columnMap.rollGyro, 0);
+      const rawPitchGyro = this.getBBLVal(rowValues, this.columnMap.pitchGyro, 0);
+      const rawYawGyro = this.getBBLVal(rowValues, this.columnMap.yawGyro, 0);
+
+      this.roll.gyro.push(rawRollGyro * gyroScale);
+      this.pitch.gyro.push(rawPitchGyro * gyroScale);
+      this.yaw.gyro.push(rawYawGyro * gyroScale);
+
+      const rawRollSp = this.getBBLVal(rowValues, this.columnMap.rollSetpoint, 0);
+      const rawPitchSp = this.getBBLVal(rowValues, this.columnMap.pitchSetpoint, 0);
+      const rawYawSp = this.getBBLVal(rowValues, this.columnMap.yawSetpoint, 0);
+
+      this.roll.setpoint.push(this.rcCommandToRate(rawRollSp, 0));
+      this.pitch.setpoint.push(this.rcCommandToRate(rawPitchSp, 1));
+      this.yaw.setpoint.push(this.rcCommandToRate(rawYawSp, 2));
+
       this.roll.p.push(this.getBBLVal(rowValues, this.columnMap.rollP, 0));
       this.roll.i.push(this.getBBLVal(rowValues, this.columnMap.rollI, 0));
       this.roll.d.push(this.getBBLVal(rowValues, this.columnMap.rollD, 0));
       this.roll.f.push(this.getBBLVal(rowValues, this.columnMap.rollF, 0));
 
-      this.pitch.setpoint.push(this.getBBLVal(rowValues, this.columnMap.pitchSetpoint, 0));
-      this.pitch.gyro.push(this.getBBLVal(rowValues, this.columnMap.pitchGyro, 0));
       this.pitch.p.push(this.getBBLVal(rowValues, this.columnMap.pitchP, 0));
       this.pitch.i.push(this.getBBLVal(rowValues, this.columnMap.pitchI, 0));
       this.pitch.d.push(this.getBBLVal(rowValues, this.columnMap.pitchD, 0));
       this.pitch.f.push(this.getBBLVal(rowValues, this.columnMap.pitchF, 0));
 
-      this.yaw.setpoint.push(this.getBBLVal(rowValues, this.columnMap.yawSetpoint, 0));
-      this.yaw.gyro.push(this.getBBLVal(rowValues, this.columnMap.yawGyro, 0));
       this.yaw.p.push(this.getBBLVal(rowValues, this.columnMap.yawP, 0));
       this.yaw.i.push(this.getBBLVal(rowValues, this.columnMap.yawI, 0));
       this.yaw.d.push(this.getBBLVal(rowValues, this.columnMap.yawD, 0));
@@ -852,6 +876,36 @@ class BlackboxParser {
       throw new Error(`Insufficient flight rows parsed (${this.totalSamples} rows found).`);
     }
 
+    // Auto-normalize Gyro if raw ADC counts (> 2000 max magnitude detected)
+    let maxRollGyro = 0;
+    const checkCount = Math.min(this.totalSamples, 2000);
+    for (let i = 0; i < checkCount; i++) {
+      const g = Math.abs(this.roll.gyro[i]);
+      if (g > maxRollGyro) maxRollGyro = g;
+    }
+    if (maxRollGyro > 2000) {
+      const adcToDeg = 2000.0 / 32768.0; // 0.061035 LSB per deg/s
+      for (let i = 0; i < this.totalSamples; i++) {
+        this.roll.gyro[i] *= adcToDeg;
+        this.pitch.gyro[i] *= adcToDeg;
+        this.yaw.gyro[i] *= adcToDeg;
+      }
+    }
+
+    // Auto-normalize Setpoints if raw stick deflection (max <= 505 stick units detected)
+    let maxRollSp = 0;
+    for (let i = 0; i < checkCount; i++) {
+      const sp = Math.abs(this.roll.setpoint[i]);
+      if (sp > maxRollSp) maxRollSp = sp;
+    }
+    if (maxRollSp > 5 && maxRollSp <= 505) {
+      for (let i = 0; i < this.totalSamples; i++) {
+        this.roll.setpoint[i] = this.rcCommandToRate(this.roll.setpoint[i], 0);
+        this.pitch.setpoint[i] = this.rcCommandToRate(this.pitch.setpoint[i], 1);
+        this.yaw.setpoint[i] = this.rcCommandToRate(this.yaw.setpoint[i], 2);
+      }
+    }
+
     // Normalize time to start at 0.000s
     const startT = this.time[0];
     for (let i = 0; i < this.totalSamples; i++) {
@@ -871,6 +925,60 @@ class BlackboxParser {
       const loopUs = parseInt(this.metadata['looptime'] || '1000', 10);
       this.sampleRate = loopUs > 0 ? Math.round(1e6 / loopUs) : 1000;
     }
+  }
+
+  hexToFloat(hexStr) {
+    if (!hexStr) return 1.0;
+    try {
+      const clean = String(hexStr).trim().replace(/^0x/i, '');
+      const intVal = parseInt(clean, 16);
+      if (isNaN(intVal)) return 1.0;
+      const buf = new ArrayBuffer(4);
+      const view = new DataView(buf);
+      view.setUint32(0, intVal);
+      const flt = view.getFloat32(0);
+      return (flt && !isNaN(flt) && isFinite(flt)) ? flt : 1.0;
+    } catch {
+      return 1.0;
+    }
+  }
+
+  parseRateArray(str, defaultVal = 100) {
+    if (!str) return [defaultVal, defaultVal, defaultVal];
+    const cleaned = String(str).replace(/[\[\]]/g, '');
+    const parts = cleaned.split(',').map(s => parseFloat(s.trim()));
+    if (parts.length >= 3 && !isNaN(parts[0])) return parts;
+    if (parts.length === 1 && !isNaN(parts[0])) return [parts[0], parts[0], parts[0]];
+    return [defaultVal, defaultVal, defaultVal];
+  }
+
+  rcCommandToRate(rcCommand, axis = 0) {
+    if (rcCommand === undefined || isNaN(rcCommand)) return 0;
+    // If setpoint is already scaled (magnitude > 500), return as-is
+    if (Math.abs(rcCommand) > 505) return rcCommand;
+
+    // rcCommand stick deflection: -500 to +500
+    const deflection = Math.max(-1.0, Math.min(1.0, rcCommand / 500.0));
+
+    // Rates metadata or default Betaflight rates (1.00 rcRate, 0.70 superRate, 0 expo)
+    const rcRates = this.parseRateArray(this.metadata['rc_rates'] || this.metadata['rc_rate'] || this.metadata['rcrate'], 100);
+    const superRates = this.parseRateArray(this.metadata['rates'] || this.metadata['super_expo_factor'] || this.metadata['super_rate'], 70);
+    const rcExpos = this.parseRateArray(this.metadata['rc_expo'] || this.metadata['rcexpo'], 0);
+
+    const rcRate = (rcRates[axis] || 100) / 100.0;
+    const superRate = (superRates[axis] || 70) / 100.0;
+    const expo = (rcExpos[axis] || 0) / 100.0;
+
+    let d = deflection;
+    if (expo > 0) {
+      d = d * Math.pow(Math.abs(d), 3) * expo + d * (1.0 - expo);
+    }
+    let rate = rcRate * d * 200.0;
+    if (superRate > 0) {
+      const denom = Math.max(0.01, 1.0 - Math.abs(deflection) * superRate);
+      rate = rate / denom;
+    }
+    return rate;
   }
 
   mapBBLColumns(names) {
@@ -904,16 +1012,27 @@ class BlackboxParser {
         colMap.throttle = idx;
       }
 
-      // Roll Setpoint / RC
-      if (/rccommand\[0\]|setpoint\[0\]|axisrate\[0\]|rc_roll|roll_rc|target_roll/i.test(lower)) {
+      // Roll Setpoint / RC (prioritize pre-scaled deg/s target)
+      if (/^setpoint\[0\]|^rccommands\[0\]|^axisrate\[0\]/i.test(lower)) {
+        colMap.rollSetpoint = idx;
+        colMap.rollSetpointIsDeg = true;
+      } else if (!colMap.rollSetpointIsDeg && /rccommand\[0\]|rc_roll|roll_rc|target_roll/i.test(lower)) {
         colMap.rollSetpoint = idx;
       }
+
       // Pitch Setpoint / RC
-      else if (/rccommand\[1\]|setpoint\[1\]|axisrate\[1\]|rc_pitch|pitch_rc|target_pitch/i.test(lower)) {
+      if (/^setpoint\[1\]|^rccommands\[1\]|^axisrate\[1\]/i.test(lower)) {
+        colMap.pitchSetpoint = idx;
+        colMap.pitchSetpointIsDeg = true;
+      } else if (!colMap.pitchSetpointIsDeg && /rccommand\[1\]|rc_pitch|pitch_rc|target_pitch/i.test(lower)) {
         colMap.pitchSetpoint = idx;
       }
+
       // Yaw Setpoint / RC
-      else if (/rccommand\[2\]|setpoint\[2\]|axisrate\[2\]|rc_yaw|yaw_rc|target_yaw/i.test(lower)) {
+      if (/^setpoint\[2\]|^rccommands\[2\]|^axisrate\[2\]/i.test(lower)) {
+        colMap.yawSetpoint = idx;
+        colMap.yawSetpointIsDeg = true;
+      } else if (!colMap.yawSetpointIsDeg && /rccommand\[2\]|rc_yaw|yaw_rc|target_yaw/i.test(lower)) {
         colMap.yawSetpoint = idx;
       }
 

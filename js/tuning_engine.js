@@ -24,6 +24,23 @@ class TuningEngine {
         targetRiseTimeMs: 42,
         targetOvershootPct: 7
       },
+      '3in_freestyle_4s': {
+        name: '3" Freestyle 4S',
+        pids: {
+          roll: { p: 44, i: 72, d: 28, f: 115, dMax: 34 },
+          pitch: { p: 48, i: 78, d: 32, f: 125, dMax: 38 },
+          yaw: { p: 42, i: 80, d: 0, f: 105, dMax: 0 }
+        },
+        masterMultiplier: 1.0,
+        antiGravity: 3800,
+        tpaRate: 0.65,
+        tpaBreakpoint: 1300,
+        gyroFilterSlider: 1.30,
+        dtermFilterSlider: 1.20,
+        dynamicIdle: 45,
+        targetRiseTimeMs: 29,
+        targetOvershootPct: 6
+      },
       '3_5in_freestyle_4s': {
         name: '3.5" Freestyle 4S',
         pids: {
@@ -79,22 +96,123 @@ class TuningEngine {
   }
 
   /**
+   * Derive dynamic physics targets from user hardware specifications
+   * (Prop diameter, All-Up-Weight, battery voltage, and motor size)
+   */
+  calculateDronePhysicsProfile(specs = {}) {
+    const prop = Math.max(1.5, Math.min(10.0, parseFloat(specs.propSize) || 3.0));
+    const defaultWeight = prop <= 2.5 ? 90 : (prop <= 3.2 ? 165 : (prop <= 4.0 ? 250 : (prop <= 5.2 ? 680 : 1200)));
+    const weight = Math.max(20, Math.min(2500, parseFloat(specs.weight) || defaultWeight));
+    const cells = Math.max(1, Math.min(8, parseInt(specs.cellCount, 10) || (prop <= 3.2 ? 4 : 6)));
+    const motorKv = parseInt(specs.motorKv, 10) || (prop <= 3.2 ? 3800 : (cells >= 6 ? 1950 : 2550));
+    const style = specs.flyingStyle || 'freestyle';
+
+    // 1. Dynamic Target Rise Time (ms)
+    // Small props have ~1/4 the moment of inertia of 5" props.
+    // 3" 165g -> ~28-32ms, 5" 680g -> ~40-44ms, 7" 1200g -> ~60-70ms
+    const baseRise = 18.0 * Math.sqrt(prop) * Math.pow(weight / (110.0 * Math.pow(prop, 1.2)), 0.22);
+    const targetRiseTimeMs = Math.round(Math.max(22, Math.min(80, baseRise)));
+
+    // 2. Expected motor RPM & noise floor
+    // 3" 4S spins at ~38,000-45,000 RPM (motor noise shifted up to 350-550Hz)
+    const expectedRpm = Math.round(Math.min(55000, motorKv * cells * 3.7 * 0.75));
+
+    // 3. Recommended Filter Sliders based on prop size
+    // Because motor noise is shifted higher on smaller props, gyro filters can safely run higher
+    let gyroFilterSlider = 1.0;
+    let dtermFilterSlider = 1.0;
+    if (prop <= 2.6) {
+      gyroFilterSlider = 1.45;
+      dtermFilterSlider = 1.30;
+    } else if (prop <= 3.2) {
+      gyroFilterSlider = 1.35;
+      dtermFilterSlider = 1.20;
+    } else if (prop <= 4.0) {
+      gyroFilterSlider = 1.20;
+      dtermFilterSlider = 1.10;
+    } else if (prop <= 5.2) {
+      gyroFilterSlider = 1.05;
+      dtermFilterSlider = 1.0;
+    } else {
+      gyroFilterSlider = 0.85;
+      dtermFilterSlider = 0.85;
+    }
+
+    // 4. Anti-Gravity Gain based on disk loading
+    const diskArea = Math.PI * Math.pow(prop / 2, 2);
+    const diskLoading = weight / diskArea; // g/sq inch
+    let antiGravity = Math.round(3200 + (diskLoading - 15) * 35);
+    antiGravity = Math.max(3200, Math.min(4800, antiGravity));
+
+    // 5. TPA based on voltage & prop size
+    let tpaBreakpoint = 1350;
+    let tpaRate = 0.65;
+    if (cells >= 6) {
+      tpaBreakpoint = 1300;
+      tpaRate = 0.70;
+    } else if (cells === 4 && prop <= 3.5) {
+      tpaBreakpoint = 1300;
+      tpaRate = 0.65;
+    } else if (cells <= 2) {
+      tpaBreakpoint = 1450;
+      tpaRate = 0.50;
+    }
+
+    // 6. Flying style modifications
+    if (style === 'racing') {
+      gyroFilterSlider = +(gyroFilterSlider * 1.08).toFixed(2);
+      dtermFilterSlider = +(dtermFilterSlider * 1.05).toFixed(2);
+    } else if (style === 'cinematic') {
+      gyroFilterSlider = +(gyroFilterSlider * 0.90).toFixed(2);
+      dtermFilterSlider = +(dtermFilterSlider * 0.90).toFixed(2);
+    }
+
+    return {
+      propSize: prop,
+      weight: weight,
+      cellCount: cells,
+      motorKv: motorKv,
+      style: style,
+      targetRiseTimeMs: targetRiseTimeMs,
+      expectedRpm: expectedRpm,
+      gyroFilterSlider: Math.min(1.5, gyroFilterSlider),
+      dtermFilterSlider: Math.min(1.4, dtermFilterSlider),
+      antiGravity: antiGravity,
+      tpaBreakpoint: tpaBreakpoint,
+      tpaRate: tpaRate
+    };
+  }
+
+  /**
    * Run full tune diagnostic and recommendation algorithm
    * @param {Object} input
    *   - stepMetrics: { roll, pitch, yaw }
    *   - noiseMetrics: { roll, pitch }
    *   - currentConfig: { pids, masterMultiplier, antiGravity, ... }
    *   - quadType: string
+   *   - droneSpecs: { propSize, weight, cellCount, motorKv, flyingStyle }
    *   - pilotSymptoms: Array<string>
    * @returns {Object} diagnosis & recommended tune
    */
   generateRecommendation(input) {
     const quadType = input.quadType || '5in_freestyle_6s';
-    const baseline = this.defaultPresets[quadType] || this.defaultPresets['5in_freestyle_6s'];
+    const baseline = JSON.parse(JSON.stringify(this.defaultPresets[quadType] || this.defaultPresets['5in_freestyle_6s']));
     const current = input.currentConfig || JSON.parse(JSON.stringify(baseline));
     const step = input.stepMetrics || {};
     const noise = input.noiseMetrics || {};
     const symptoms = input.pilotSymptoms || [];
+
+    // Calculate dynamic physics profile if custom drone specifications are supplied
+    let physicsProfile = null;
+    if (input.droneSpecs) {
+      physicsProfile = this.calculateDronePhysicsProfile(input.droneSpecs);
+      baseline.targetRiseTimeMs = physicsProfile.targetRiseTimeMs;
+      baseline.antiGravity = physicsProfile.antiGravity;
+      baseline.tpaBreakpoint = physicsProfile.tpaBreakpoint;
+      baseline.tpaRate = physicsProfile.tpaRate;
+      baseline.gyroFilterSlider = physicsProfile.gyroFilterSlider;
+      baseline.dtermFilterSlider = physicsProfile.dtermFilterSlider;
+    }
 
     // Clone current to begin recommendations
     const recPids = {
@@ -103,16 +221,25 @@ class TuningEngine {
       yaw: { ...current.pids.yaw }
     };
     let recMasterMultiplier = current.masterMultiplier || 1.0;
-    let recAntiGravity = current.antiGravity || 3500;
-    let recTpaRate = current.tpaRate || 0.65;
-    let recTpaBreakpoint = current.tpaBreakpoint || 1350;
-    let recGyroSlider = current.gyroFilterSlider || 1.0;
-    let recDtermSlider = current.dtermFilterSlider || 1.0;
-    let recDynamicIdle = current.dynamicIdle || 40;
+    let recAntiGravity = baseline.antiGravity || current.antiGravity || 3500;
+    let recTpaRate = baseline.tpaRate || current.tpaRate || 0.65;
+    let recTpaBreakpoint = baseline.tpaBreakpoint || current.tpaBreakpoint || 1350;
+    let recGyroSlider = baseline.gyroFilterSlider || current.gyroFilterSlider || 1.0;
+    let recDtermSlider = baseline.dtermFilterSlider || current.dtermFilterSlider || 1.0;
+    let recDynamicIdle = baseline.dynamicIdle || current.dynamicIdle || 40;
 
     const diffList = [];
     const diagnoses = [];
     const warnings = [];
+
+    // Add Physics Profile Info Card if custom specs provided
+    if (physicsProfile) {
+      diagnoses.push({
+        title: `Calibrated Profile: ${physicsProfile.propSize}" ${physicsProfile.cellCount}S (~${physicsProfile.weight}g AUW)`,
+        description: `Target step rise time calibrated to ${physicsProfile.targetRiseTimeMs}ms based on prop rotational inertia. Motor band ~${physicsProfile.expectedRpm.toLocaleString()} RPM allows low-latency filter sliders.`,
+        type: "info"
+      });
+    }
 
     // 1. Evaluate Noise Profile First (Safety Barrier)
     const isHighNoise = (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.riskLevel === 'CRITICAL') ||

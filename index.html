@@ -116,6 +116,113 @@
       </div>
     </section>
 
+    <!-- Drone Hardware Specifications & Physics Profile -->
+    <section class="drone-specs-card">
+      <div class="drone-specs-header">
+        <div class="drone-specs-title-wrap">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 2v4m0 12v4M2 12h4m12 0h4"></path>
+            <path d="M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path>
+          </svg>
+          <div class="drone-specs-title">Drone Hardware Specifications & Physics Profile</div>
+          <span class="drone-specs-badge" id="physicsBadge">Dynamic Physics Active</span>
+        </div>
+        <div style="font-size: 0.75rem; color: var(--text-muted);">
+          Calculates inertia-specific rise time targets, Anti-Gravity scaling, and filter cutoffs
+        </div>
+      </div>
+
+      <div class="drone-specs-grid">
+        <!-- Prop Size -->
+        <div class="spec-field">
+          <label class="spec-field-label" for="inputPropSize">
+            <span>Propeller Size</span>
+            <span class="spec-field-hint">Diameter</span>
+          </label>
+          <div class="spec-input-group">
+            <input type="number" id="inputPropSize" class="spec-input" min="1.5" max="10.0" step="0.5" value="3.0">
+            <span class="spec-unit">inch</span>
+          </div>
+          <div class="prop-chips" id="propChips">
+            <button type="button" class="chip-btn" data-prop="2.0">2"</button>
+            <button type="button" class="chip-btn" data-prop="2.5">2.5"</button>
+            <button type="button" class="chip-btn active" data-prop="3.0">3"</button>
+            <button type="button" class="chip-btn" data-prop="3.5">3.5"</button>
+            <button type="button" class="chip-btn" data-prop="4.0">4"</button>
+            <button type="button" class="chip-btn" data-prop="5.0">5"</button>
+            <button type="button" class="chip-btn" data-prop="7.0">7"</button>
+          </div>
+        </div>
+
+        <!-- All-Up Weight (AUW) -->
+        <div class="spec-field">
+          <label class="spec-field-label" for="inputDroneWeight">
+            <span>All-Up Weight (AUW)</span>
+            <span class="spec-field-hint">Quad + LiPo + Cam</span>
+          </label>
+          <div class="spec-input-group">
+            <input type="number" id="inputDroneWeight" class="spec-input" min="20" max="3000" step="5" value="165">
+            <span class="spec-unit">g</span>
+          </div>
+          <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
+            Disk loading governs Anti-Gravity & pitch inertia
+          </div>
+        </div>
+
+        <!-- Battery Cell Count -->
+        <div class="spec-field">
+          <label class="spec-field-label" for="selectCellCount">
+            <span>Battery Cells</span>
+            <span class="spec-field-hint">LiPo</span>
+          </label>
+          <select id="selectCellCount" class="spec-input" style="padding-right: 0.85rem;">
+            <option value="1">1S (3.8V)</option>
+            <option value="2">2S (7.4V)</option>
+            <option value="3">3S (11.1V)</option>
+            <option value="4" selected>4S (14.8V)</option>
+            <option value="5">5S (18.5V)</option>
+            <option value="6">6S (22.2V)</option>
+            <option value="8">8S (29.6V)</option>
+          </select>
+          <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
+            Calibrates TPA breakpoint & motor power curve
+          </div>
+        </div>
+
+        <!-- Motor KV -->
+        <div class="spec-field">
+          <label class="spec-field-label" for="inputMotorKv">
+            <span>Motor Rating</span>
+            <span class="spec-field-hint">RPM/V</span>
+          </label>
+          <div class="spec-input-group">
+            <input type="number" id="inputMotorKv" class="spec-input" min="800" max="35000" step="50" value="3800">
+            <span class="spec-unit">KV</span>
+          </div>
+          <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
+            Identifies motor noise band & gyro filter headroom
+          </div>
+        </div>
+
+        <!-- Flying Style -->
+        <div class="spec-field">
+          <label class="spec-field-label" for="selectFlyingStyle">
+            <span>Flight Discipline</span>
+            <span class="spec-field-hint">Feel Profile</span>
+          </label>
+          <select id="selectFlyingStyle" class="spec-input" style="padding-right: 0.85rem;">
+            <option value="freestyle" selected>Freestyle / Acro (Crisp, damped)</option>
+            <option value="racing">Drone Racing (Snappy, stiff response)</option>
+            <option value="cinematic">Cinematic / Long Range (Soft, ultra-smooth)</option>
+          </select>
+          <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.4rem;">
+            Biases step overshoot tolerance & filter phase delay
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Navigation Tabs -->
     <nav class="nav-tabs">
       <button class="tab-btn active" data-tab="tabDiagnostics">
@@ -465,6 +572,7 @@
             <label class="form-label">Quad Category</label>
             <select class="form-select" id="quadTypeSelect">
               <option value="5in_freestyle_6s">5" Freestyle 6S</option>
+              <option value="3in_freestyle_4s">3" Freestyle 4S</option>
               <option value="3_5in_freestyle_4s">3.5" Freestyle 4S</option>
               <option value="7in_long_range">7" Long Range / Cinematic</option>
               <option value="whoop_toothpick">1S-2S Toothpick / Whoop</option>
@@ -537,13 +645,13 @@ set master_multiplier = 1.05..."></textarea>
   </footer>
 
   <!-- Scripts with Cache-Buster -->
-  <script src="js/parser.js?v=2.6"></script>
-  <script src="js/step_response.js?v=2.6"></script>
-  <script src="js/fft_analyzer.js?v=2.6"></script>
-  <script src="js/tuning_engine.js?v=2.6"></script>
-  <script src="js/simulator.js?v=2.6"></script>
-  <script src="js/demo_data.js?v=2.6"></script>
-  <script src="js/charts.js?v=2.6"></script>
-  <script src="js/app.js?v=2.6"></script>
+  <script src="js/parser.js?v=2.7"></script>
+  <script src="js/step_response.js?v=2.7"></script>
+  <script src="js/fft_analyzer.js?v=2.7"></script>
+  <script src="js/tuning_engine.js?v=2.7"></script>
+  <script src="js/simulator.js?v=2.7"></script>
+  <script src="js/demo_data.js?v=2.7"></script>
+  <script src="js/charts.js?v=2.7"></script>
+  <script src="js/app.js?v=2.7"></script>
 </body>
 </html>

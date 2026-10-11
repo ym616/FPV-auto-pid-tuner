@@ -8,7 +8,8 @@ The tool runs entirely in the browser with zero external dependencies and works 
 
 ## Features
 
-- **Direct Blackbox (.BBL / .BFL) & CSV Ingestion**: Accepts raw binary Blackbox logs directly off onboard flash or SD cards without needing external conversion tools, as well as CSV exports from Blackbox Explorer.
+- **Direct Blackbox (.BBL / .BFL) & CSV Ingestion**: Accepts raw binary Blackbox logs directly off onboard flash or SD cards without needing external conversion tools, as well as CSV exports from Blackbox Explorer. Automatically scales raw gyro ADC sensor units ($1 / 16.384 \approx 0.061035$) and stick inputs to calibrated degrees per second ($\text{deg/s}$) across both formats.
+- **Drone Hardware Specifications & Physics Model**: Enter your exact propeller size in inches, all-up weight (AUW in grams including battery and camera), battery cell count (1S–8S), motor KV, and flight discipline. The physics engine dynamically computes rotational inertia, target rise time ($T_r$), disk-loading-based Anti-Gravity gain, TPA breakpoint, and filter slider headroom.
 - **Robust Timestamp & Rate Detection**: Supports all Betaflight timestamp formats (microseconds, milliseconds, seconds, `timestamp`, `time_us`, and `loopIteration` derivation), unrolls 32-bit timestamp rollover boundaries, and computes loop rates automatically.
 - **Step Response Deconvolution**: Extracts stick step inputs (rolls, flips, turns) and reconstructs normalized closed-loop response curves. Computes rise time ($T_r$), peak overshoot ($M_p$), damping ratio ($\zeta$), settling time, and bounce-back depth.
 - **FFT Noise Analysis**: Welch-windowed power spectral density (PSD) calculation up to 600+ Hz. Separates flight dynamics (0–60 Hz), propwash oscillation (35–90 Hz), frame resonance (60–200 Hz), and motor RPM harmonics (>200 Hz).

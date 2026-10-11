@@ -19,6 +19,7 @@ class AeroPIDApp {
 
     this.charts = {};
     this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets['5in_freestyle_6s']));
+    this.droneSpecs = { propSize: 3.0, weight: 165, cellCount: 4, motorKv: 3800, flyingStyle: 'freestyle' };
     this.activeScenario = 'bouncy_5in';
 
     this.init();
@@ -179,6 +180,116 @@ class AeroPIDApp {
     symptomCheckboxes.forEach(cb => {
       cb.addEventListener('change', () => this.analyzeAndRecommend());
     });
+
+    // Drone Hardware Specs Inputs
+    ['inputPropSize', 'inputDroneWeight', 'selectCellCount', 'inputMotorKv', 'selectFlyingStyle'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('change', () => {
+          this.readDroneSpecs();
+          this.analyzeAndRecommend();
+        });
+      }
+    });
+
+    // Quick Prop Selection Chips
+    const propChips = document.querySelectorAll('.chip-btn[data-prop]');
+    propChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        propChips.forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        const prop = parseFloat(chip.getAttribute('data-prop'));
+        const propInput = document.getElementById('inputPropSize');
+        if (propInput) propInput.value = prop;
+
+        const weightInput = document.getElementById('inputDroneWeight');
+        const cellSelect = document.getElementById('selectCellCount');
+        const kvInput = document.getElementById('inputMotorKv');
+        const quadTypeSelect = document.getElementById('quadTypeSelect');
+
+        if (prop <= 2.2) {
+          if (weightInput) weightInput.value = 75;
+          if (cellSelect) cellSelect.value = '1';
+          if (kvInput) kvInput.value = 19000;
+          if (quadTypeSelect) quadTypeSelect.value = 'whoop_toothpick';
+        } else if (prop <= 2.6) {
+          if (weightInput) weightInput.value = 110;
+          if (cellSelect) cellSelect.value = '2';
+          if (kvInput) kvInput.value = 8500;
+          if (quadTypeSelect) quadTypeSelect.value = 'whoop_toothpick';
+        } else if (prop <= 3.2) {
+          if (weightInput) weightInput.value = 165;
+          if (cellSelect) cellSelect.value = '4';
+          if (kvInput) kvInput.value = 3800;
+          if (quadTypeSelect) quadTypeSelect.value = '3in_freestyle_4s';
+        } else if (prop <= 4.0) {
+          if (weightInput) weightInput.value = 250;
+          if (cellSelect) cellSelect.value = '4';
+          if (kvInput) kvInput.value = 2850;
+          if (quadTypeSelect) quadTypeSelect.value = '3_5in_freestyle_4s';
+        } else if (prop <= 5.5) {
+          if (weightInput) weightInput.value = 680;
+          if (cellSelect) cellSelect.value = '6';
+          if (kvInput) kvInput.value = 1950;
+          if (quadTypeSelect) quadTypeSelect.value = '5in_freestyle_6s';
+        } else {
+          if (weightInput) weightInput.value = 1200;
+          if (cellSelect) cellSelect.value = '6';
+          if (kvInput) kvInput.value = 1300;
+          if (quadTypeSelect) quadTypeSelect.value = '7in_long_range';
+        }
+
+        const qType = quadTypeSelect ? quadTypeSelect.value : '5in_freestyle_6s';
+        if (this.tuningEngine.defaultPresets[qType]) {
+          this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets[qType]));
+        }
+
+        this.readDroneSpecs();
+        this.analyzeAndRecommend();
+      });
+    });
+  }
+
+  readDroneSpecs() {
+    const propInput = document.getElementById('inputPropSize');
+    const weightInput = document.getElementById('inputDroneWeight');
+    const cellSelect = document.getElementById('selectCellCount');
+    const kvInput = document.getElementById('inputMotorKv');
+    const styleSelect = document.getElementById('selectFlyingStyle');
+
+    this.droneSpecs = {
+      propSize: propInput ? parseFloat(propInput.value) || 3.0 : 3.0,
+      weight: weightInput ? parseFloat(weightInput.value) || 165 : 165,
+      cellCount: cellSelect ? parseInt(cellSelect.value, 10) || 4 : 4,
+      motorKv: kvInput ? parseInt(kvInput.value, 10) || 3800 : 3800,
+      flyingStyle: styleSelect ? styleSelect.value : 'freestyle'
+    };
+    return this.droneSpecs;
+  }
+
+  updateSpecsInputs(specs) {
+    if (!specs) return;
+    const propInput = document.getElementById('inputPropSize');
+    const weightInput = document.getElementById('inputDroneWeight');
+    const cellSelect = document.getElementById('selectCellCount');
+    const kvInput = document.getElementById('inputMotorKv');
+    const styleSelect = document.getElementById('selectFlyingStyle');
+
+    if (propInput && specs.propSize != null) propInput.value = specs.propSize;
+    if (weightInput && specs.weight != null) weightInput.value = specs.weight;
+    if (cellSelect && specs.cellCount != null) cellSelect.value = specs.cellCount;
+    if (kvInput && specs.motorKv != null) kvInput.value = specs.motorKv;
+    if (styleSelect && specs.flyingStyle != null) styleSelect.value = specs.flyingStyle;
+
+    const propChips = document.querySelectorAll('.chip-btn[data-prop]');
+    propChips.forEach(c => {
+      if (Math.abs(parseFloat(c.getAttribute('data-prop')) - specs.propSize) < 0.1) {
+        c.classList.add('active');
+      } else {
+        c.classList.remove('active');
+      }
+    });
+    this.readDroneSpecs();
   }
 
   handleFileUpload(file) {
@@ -211,6 +322,15 @@ class AeroPIDApp {
 
     this.activeScenario = scId;
     this.setStatus('Generating simulation log...', 'warning');
+
+    // Update specs inputs based on scenario
+    if (scId === 'hot_motors_3in5') {
+      this.updateSpecsInputs({ propSize: 3.5, weight: 245, cellCount: 4, motorKv: 3100, flyingStyle: 'freestyle' });
+    } else if (scId === 'sluggish_7in') {
+      this.updateSpecsInputs({ propSize: 7.0, weight: 1200, cellCount: 6, motorKv: 1300, flyingStyle: 'cinematic' });
+    } else {
+      this.updateSpecsInputs({ propSize: 5.0, weight: 680, cellCount: 6, motorKv: 1950, flyingStyle: 'freestyle' });
+    }
 
     // Update config & symptoms to match scenario
     this.currentConfig = JSON.parse(JSON.stringify(sc.config));
@@ -278,12 +398,14 @@ class AeroPIDApp {
 
     const quadType = document.getElementById('quadTypeSelect').value;
 
-    // 4. Run Tuning Engine
+    // 4. Run Tuning Engine with dynamic drone hardware specs
+    this.readDroneSpecs();
     this.recommendation = this.tuningEngine.generateRecommendation({
       stepMetrics: this.stepResults,
       noiseMetrics: this.fftResults,
       currentConfig: this.currentConfig,
       quadType: quadType,
+      droneSpecs: this.droneSpecs,
       pilotSymptoms: symptoms
     });
 
