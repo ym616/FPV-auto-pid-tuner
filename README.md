@@ -8,6 +8,8 @@ The tool runs entirely in the browser with zero external dependencies and works 
 
 ## Features
 
+- **Direct Blackbox (.BBL / .BFL) & CSV Ingestion**: Accepts raw binary Blackbox logs directly off onboard flash or SD cards without needing external conversion tools, as well as CSV exports from Blackbox Explorer.
+- **Robust Timestamp & Rate Detection**: Supports all Betaflight timestamp formats (microseconds, milliseconds, seconds, `timestamp`, `time_us`, and `loopIteration` derivation), unrolls 32-bit timestamp rollover boundaries, and computes loop rates automatically.
 - **Step Response Deconvolution**: Extracts stick step inputs (rolls, flips, turns) and reconstructs normalized closed-loop response curves. Computes rise time ($T_r$), peak overshoot ($M_p$), damping ratio ($\zeta$), settling time, and bounce-back depth.
 - **FFT Noise Analysis**: Welch-windowed power spectral density (PSD) calculation up to 600+ Hz. Separates flight dynamics (0–60 Hz), propwash oscillation (35–90 Hz), frame resonance (60–200 Hz), and motor RPM harmonics (>200 Hz).
 - **Thermal Safety Check**: Detects high-frequency D-term noise amplification before recommending gain increases to prevent motor overheating.
@@ -44,9 +46,9 @@ This binds to `http://127.0.0.1:8080/index.html` and launches your default brows
    - Set the logging rate to `1.0 kHz` or `2.0 kHz`.
    - Set debug mode to `DEFAULT` or `GYRO_SCALED`.
    - Fly clean, isolated maneuvers (sharp roll/pitch flicks, a low-throttle turn, and a full-throttle punchout).
-   - In Betaflight Blackbox Explorer, open the `.bbl` or `.bfl` file and click **Export** -> **Export to CSV**.
+   - Save the raw `.bbl` / `.bfl` log from your flight controller (or export to CSV via Betaflight Blackbox Explorer). Both formats are supported directly.
 2. **Load Log & Profile**:
-   - Drag and drop the CSV into the upload area (or select one of the built-in test scenarios).
+   - Drag and drop your `.bbl` or `.csv` file into the upload area (or select one of the built-in test scenarios).
    - In the **Drone Profile** tab, select your frame class or paste your Betaflight `diff all` dump.
 3. **Analyze Results**:
    - Check the **Flight Tune Health** score and diagnostic findings.

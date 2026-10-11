@@ -187,12 +187,13 @@ class AeroPIDApp {
 
     reader.onload = (e) => {
       try {
-        const content = e.target.result;
-        this.parser.parse(content);
+        const buffer = e.target.result;
+        this.parser.parse(buffer);
         this.currentData = this.parser.getDataSummary();
         this.updateHeaderStats(file.name);
         this.analyzeAndRecommend();
-        this.showToast(`Loaded ${file.name} successfully!`);
+        const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox BBL' : 'CSV';
+        this.showToast(`Loaded ${typeLabel} log successfully!`);
       } catch (err) {
         console.error(err);
         this.setStatus('Parse error', 'danger');
@@ -200,7 +201,7 @@ class AeroPIDApp {
       }
     };
 
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   }
 
   loadScenario(scId) {
