@@ -19,10 +19,16 @@ class TelemetryCanvasChart {
     this.resize = () => {
       if (!this.canvas) return;
       const rect = this.canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
       this.width = rect.width;
       this.height = rect.height;
-      this.canvas.width = rect.width * this.dpr;
-      this.canvas.height = rect.height * this.dpr;
+      this.canvas.width = Math.floor(rect.width * this.dpr);
+      this.canvas.height = Math.floor(rect.height * this.dpr);
+      if (this.ctx.resetTransform) {
+        this.ctx.resetTransform();
+      } else {
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      }
       this.ctx.scale(this.dpr, this.dpr);
     };
     this.resize();

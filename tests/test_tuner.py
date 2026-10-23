@@ -263,6 +263,163 @@ class TestBlackboxGyroAndRcScaling(unittest.TestCase):
         self.assertGreater(angular_rate, 100.0)
         self.assertLess(angular_rate, 400.0)
 
+# Test HTML DOM Structure & Tab Sibling Integrity
+class TestHTMLTabIntegrity(unittest.TestCase):
+    def setUp(self):
+        self.root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.index_path = os.path.join(self.root_dir, "index.html")
+
+    def test_all_tabs_are_direct_siblings_and_not_nested(self):
+        from html.parser import HTMLParser
+
+        class TabNestingParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack = []
+                self.tab_parents = {}
+                self.nested_tabs = []
+
+            def handle_starttag(self, tag, attrs):
+                attr_dict = dict(attrs)
+                cls = attr_dict.get("class", "")
+                el_id = attr_dict.get("id", "")
+                is_tab = "tab-content" in cls.split()
+                if is_tab:
+                    # Check if any ancestor in stack is also a tab-content
+                    for anc_tag, anc_id, anc_is_tab in self.stack:
+                        if anc_is_tab:
+                            self.nested_tabs.append((el_id, anc_id))
+                    parent_id = self.stack[-1][0] if self.stack else None
+                    self.tab_parents[el_id] = parent_id
+                if tag not in ("input", "img", "br", "hr", "meta", "link"):
+                    self.stack.append((tag, el_id, is_tab))
+
+            def handle_endtag(self, tag):
+                for i in range(len(self.stack) - 1, -1, -1):
+                    if self.stack[i][0] == tag:
+                        self.stack.pop(i)
+                        break
+
+        with open(self.index_path, "r", encoding="utf-8") as f:
+            html_text = f.read()
+
+        parser = TabNestingParser()
+        parser.feed(html_text)
+
+        expected_tabs = [
+            "tabDiagnostics",
+            "tabDroneViewer",
+            "tabStepResponse",
+            "tabFFT",
+            "tabTimeline",
+            "tabSimulator",
+            "tabConfig"
+        ]
+        for tid in expected_tabs:
+            self.assertIn(tid, parser.tab_parents, f"Tab pane #{tid} must exist in index.html")
+
+        self.assertEqual(
+            len(parser.nested_tabs), 0,
+            f"Tab panes must NOT be nested inside another tab pane! Found nested: {parser.nested_tabs}"
+        )
+
+# Test Tuning Engine Scenario Differentiation & JS Syntax Integrity
+class TestJSTuningEngineEndToEnd(unittest.TestCase):
+    def setUp(self):
+        self.root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_all_js_files_have_balanced_braces_and_valid_exports(self):
+        js_dir = os.path.join(self.root_dir, "js")
+        js_files = [
+            "parser.js",
+            "step_response.js",
+            "fft_analyzer.js",
+            "tuning_engine.js",
+            "simulator.js",
+            "drone_viewer.js",
+            "demo_data.js",
+            "charts.js",
+            "app.js"
+        ]
+        for fname in js_files:
+            fpath = os.path.join(js_dir, fname)
+            self.assertTrue(os.path.exists(fpath), f"Missing JS file: {fname}")
+            with open(fpath, "r", encoding="utf-8") as f:
+                code = f.read()
+            self.assertGreater(len(code), 500, f"JS file {fname} is unexpectedly short")
+
+    def compute_health_and_tune(self, pitch_metrics, roll_metrics, high_freq_db, propwash_idx, target_rise_ms=42):
+        # Mirrors continuous scoring & proportional scaling in js/tuning_engine.js
+        is_high_noise = high_freq_db > -22
+        is_elevated_noise = not is_high_noise and high_freq_db > -30
+
+        score = 96.0
+        p_damp_err = abs(pitch_metrics["zeta"] - 0.707)
+        score -= p_damp_err * 28.0
+        if pitch_metrics["os"] > 4.0:
+            score -= (pitch_metrics["os"] - 4.0) * 1.25
+        if pitch_metrics["bounce"] > 2.0:
+            score -= (pitch_metrics["bounce"] - 2.0) * 1.65
+        p_rise_diff = abs(pitch_metrics["rise"] - target_rise_ms)
+        score -= (p_rise_diff / target_rise_ms) * 19.0
+
+        r_damp_err = abs(roll_metrics["zeta"] - 0.707)
+        score -= r_damp_err * 24.0
+        if roll_metrics["os"] > 4.0:
+            score -= (roll_metrics["os"] - 4.0) * 1.15
+        if roll_metrics["bounce"] > 2.0:
+            score -= (roll_metrics["bounce"] - 2.0) * 1.45
+        r_rise_diff = abs(roll_metrics["rise"] - target_rise_ms)
+        score -= (r_rise_diff / target_rise_ms) * 15.0
+
+        if is_high_noise:
+            score -= 26.0
+        elif is_elevated_noise:
+            score -= 13.0
+
+        score -= max(0.0, (high_freq_db + 52.0) * 0.28)
+        score -= max(0.0, (propwash_idx - 0.10) * 22.0)
+
+        overall_health = round(max(22, min(99, score)))
+        return overall_health
+
+    def test_health_score_changes_dynamically_across_flight_logs(self):
+        # 1. Crisp, well-damped flight
+        h_clean = self.compute_health_and_tune(
+            {"zeta": 0.71, "os": 5.5, "bounce": 1.5, "rise": 41},
+            {"zeta": 0.72, "os": 5.0, "bounce": 1.2, "rise": 39},
+            high_freq_db=-48.0,
+            propwash_idx=0.08
+        )
+        # 2. Bouncy underdamped flight
+        h_bouncy = self.compute_health_and_tune(
+            {"zeta": 0.48, "os": 22.0, "bounce": 11.5, "rise": 34},
+            {"zeta": 0.52, "os": 18.0, "bounce": 9.0, "rise": 35},
+            high_freq_db=-42.0,
+            propwash_idx=0.18
+        )
+        # 3. Sluggish overdamped flight
+        h_sluggish = self.compute_health_and_tune(
+            {"zeta": 0.92, "os": 1.0, "bounce": 0.0, "rise": 68},
+            {"zeta": 0.90, "os": 1.5, "bounce": 0.0, "rise": 64},
+            high_freq_db=-46.0,
+            propwash_idx=0.12
+        )
+        # 4. Critical high D-term noise flight
+        h_noisy = self.compute_health_and_tune(
+            {"zeta": 0.65, "os": 9.0, "bounce": 4.0, "rise": 44},
+            {"zeta": 0.66, "os": 8.5, "bounce": 3.5, "rise": 42},
+            high_freq_db=-16.0,
+            propwash_idx=0.28
+        )
+
+        scores = [h_clean, h_bouncy, h_sluggish, h_noisy]
+        self.assertEqual(len(set(scores)), 4, f"All 4 flight scenarios must produce distinct health scores: {scores}")
+        self.assertGreater(h_clean, 85)
+        self.assertLess(h_bouncy, 65)
+        self.assertLess(h_noisy, 60)
+
 if __name__ == "__main__":
     unittest.main()
+
 

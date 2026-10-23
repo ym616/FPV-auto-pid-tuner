@@ -504,8 +504,13 @@ class AeroPIDApp {
     const rec = this.recommendation;
     if (!rec) return;
 
-    // Health Score
+    // Health Score & Dynamic Description
     document.getElementById('healthScoreNum').innerText = rec.overallHealth;
+    const scoreDescEl = document.getElementById('healthScoreDesc');
+    if (scoreDescEl && rec.healthDescription) {
+      scoreDescEl.innerText = rec.healthDescription;
+    }
+
     const scoreCircle = document.querySelector('.score-circle');
     if (rec.overallHealth >= 80) scoreCircle.style.borderColor = '#137333';
     else if (rec.overallHealth >= 60) scoreCircle.style.borderColor = '#ea8600';
@@ -523,6 +528,11 @@ class AeroPIDApp {
     statNoiseRisk.style.color = noiseRisk === 'CRITICAL' ? '#c5221f' : noiseRisk === 'ELEVATED' ? '#b06000' : '#137333';
 
     document.getElementById('statFilterMargin').innerText = this.fftResults.pitch.metrics.filterSliderAdvice.replace(/_/g, ' ');
+
+    const propwashEl = document.getElementById('statPropwashScore');
+    if (propwashEl && rec.propwashLabel) {
+      propwashEl.innerText = rec.propwashLabel;
+    }
 
     // Findings Cards
     const findingsGrid = document.getElementById('findingsGrid');

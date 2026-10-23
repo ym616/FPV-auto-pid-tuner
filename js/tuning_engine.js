@@ -257,11 +257,16 @@ class TuningEngine {
       });
       warnings.push("D-term noise is elevated. Lowering D-gain and reducing filter cutoff sliders to protect motor windings.");
 
-      // Reduce D on Roll and Pitch
-      recPids.roll.d = Math.round(recPids.roll.d * 0.82);
-      recPids.roll.dMax = Math.round(recPids.roll.dMax * 0.84);
-      recPids.pitch.d = Math.round(recPids.pitch.d * 0.82);
-      recPids.pitch.dMax = Math.round(recPids.pitch.dMax * 0.84);
+      // Reduce D on Roll and Pitch proportionally to noise severity
+      const highDb = Math.max(
+        (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.highFreqAvgDb) || -20,
+        (noise.roll && noise.roll.metrics && noise.roll.metrics.highFreqAvgDb) || -20
+      );
+      const cutFactor = Math.max(0.74, Math.min(0.86, 0.85 - (highDb + 22) * 0.01));
+      recPids.roll.d = Math.round(recPids.roll.d * cutFactor);
+      recPids.roll.dMax = Math.round(recPids.roll.dMax * (cutFactor + 0.02));
+      recPids.pitch.d = Math.round(recPids.pitch.d * cutFactor);
+      recPids.pitch.dMax = Math.round(recPids.pitch.dMax * (cutFactor + 0.02));
 
       // Reduce filter sliders (move left for more filtering)
       recGyroSlider = Math.max(0.65, +(recGyroSlider * 0.80).toFixed(2));
@@ -269,7 +274,7 @@ class TuningEngine {
     } else if (isElevatedNoise) {
       diagnoses.push({
         title: "Elevated High-Frequency Noise Floor",
-        description: "Moderate motor harmonic activity detected. D-term headroom is limited.",
+        description: "Moderate motor harmonic activity detected. D-term headroom is limited; tightening D-term lowpass filter slightly.",
         type: "warning"
       });
       recDtermSlider = Math.max(0.85, +(recDtermSlider * 0.90).toFixed(2));
@@ -280,46 +285,76 @@ class TuningEngine {
         type: "success"
       });
       // Clean noise floor allows pushing sliders right (less latency!)
-      if (recGyroSlider < 1.3 && !symptoms.includes('hot_motors')) {
-        recGyroSlider = Math.min(1.4, +(recGyroSlider * 1.15).toFixed(2));
-        recDtermSlider = Math.min(1.3, +(recDtermSlider * 1.15).toFixed(2));
+      if (recGyroSlider < 1.35 && !symptoms.includes('hot_motors')) {
+        recGyroSlider = Math.min(1.45, +(recGyroSlider * 1.12).toFixed(2));
+        recDtermSlider = Math.min(1.35, +(recDtermSlider * 1.12).toFixed(2));
       }
     }
 
-    // 2. Evaluate Roll & Pitch Step Responses (Damping & Responsiveness)
+    // 2. Evaluate Roll, Pitch, and Yaw Step Responses (Continuous Proportional Scaling)
     const rollMetrics = step.roll ? step.roll.metrics : null;
     const pitchMetrics = step.pitch ? step.pitch.metrics : null;
+    const yawMetrics = step.yaw ? step.yaw.metrics : null;
 
     // A. Pitch Axis Evaluation
     if (pitchMetrics) {
       const pOS = pitchMetrics.overshootPercent;
       const pRise = pitchMetrics.riseTimeMs;
       const pBounce = pitchMetrics.bounceDepthPercent;
+      const pLat = pitchMetrics.latencyMs || 8;
+      const targetOS = baseline.targetOvershootPct || 6.5;
 
-      if (pOS > 15 || pBounce > 8 || symptoms.includes('bounceback')) {
+      if (pOS > 11 || pBounce > 6 || symptoms.includes('bounceback')) {
+        const excessOS = Math.max(2, pOS - targetOS);
+        const excessBounce = Math.max(0, pBounce - 3);
+        const dBoost = Math.min(1.28, 1.06 + excessOS * 0.008 + excessBounce * 0.006);
+
         diagnoses.push({
           title: "Pitch Bounce-Back (Underdamped)",
-          description: `Pitch overshoot is ${pOS}% with ${pBounce}% bounce-back trough. The axis oscillates after sharp stops.`,
+          description: `Pitch overshoot is ${pOS}% with ${pBounce}% bounce-back trough (damping ratio ${pitchMetrics.zeta}). Scaling D-gain by +${Math.round((dBoost - 1) * 100)}% to arrest stop oscillations.`,
           type: "warning"
         });
 
         if (!isHighNoise) {
-          // Safe to raise D
-          recPids.pitch.d = Math.min(60, Math.round(recPids.pitch.d * 1.18));
-          recPids.pitch.dMax = Math.min(68, Math.round(recPids.pitch.dMax * 1.20));
+          recPids.pitch.d = Math.min(65, Math.round(recPids.pitch.d * dBoost));
+          recPids.pitch.dMax = Math.min(75, Math.round(recPids.pitch.dMax * (dBoost + 0.03)));
+          // If overshoot occurs with very fast rise time, Feedforward is pushing past setpoint
+          if (pRise < baseline.targetRiseTimeMs * 0.92 && pOS > 14) {
+            recPids.pitch.f = Math.round(recPids.pitch.f * 0.91);
+          }
         } else {
           // High noise: damp by lowering Feedforward & P
           recPids.pitch.p = Math.round(recPids.pitch.p * 0.90);
           recPids.pitch.f = Math.round(recPids.pitch.f * 0.85);
         }
-      } else if (pRise > baseline.targetRiseTimeMs * 1.3 && pOS < 4) {
+      } else if (pRise > baseline.targetRiseTimeMs * 1.15 && pOS < 5.5) {
+        const riseRatio = Math.min(1.6, pRise / baseline.targetRiseTimeMs);
+        const pBoost = Math.min(1.24, 1.04 + (riseRatio - 1.0) * 0.32);
+        const fBoost = Math.min(1.26, 1.05 + (riseRatio - 1.0) * 0.36);
+
         diagnoses.push({
           title: "Pitch Sluggish / Mushy (Overdamped)",
-          description: `Pitch rise time is ${pRise}ms (target is ~${baseline.targetRiseTimeMs}ms). Quad feels loose or delayed.`,
+          description: `Pitch rise time is ${pRise}ms (target is ~${baseline.targetRiseTimeMs}ms) with only ${pOS}% overshoot. Increasing P (+${Math.round((pBoost - 1) * 100)}%) and Feedforward (+${Math.round((fBoost - 1) * 100)}%) to sharpen stick tracking.`,
           type: "info"
         });
-        recPids.pitch.p = Math.round(recPids.pitch.p * 1.15);
-        recPids.pitch.f = Math.round(recPids.pitch.f * 1.18);
+        recPids.pitch.p = Math.min(95, Math.round(recPids.pitch.p * pBoost));
+        recPids.pitch.f = Math.min(220, Math.round(recPids.pitch.f * fBoost));
+      } else {
+        // Fine-tune proportional to subtle deviations so every flight produces tailored adjustments
+        const riseErr = (pRise - baseline.targetRiseTimeMs) / baseline.targetRiseTimeMs;
+        const osErr = (pOS - targetOS) / 100;
+        if (Math.abs(riseErr) > 0.05 || Math.abs(osErr) > 0.02) {
+          recPids.pitch.p = Math.round(recPids.pitch.p * (1 + riseErr * 0.18 - osErr * 0.15));
+          if (!isHighNoise) {
+            recPids.pitch.d = Math.round(recPids.pitch.d * (1 + osErr * 0.45));
+          }
+          recPids.pitch.f = Math.round(recPids.pitch.f * (1 + riseErr * 0.22 - osErr * 0.20));
+        }
+      }
+
+      // Feedforward Phase Latency Check
+      if (pLat > 13 && !isHighNoise) {
+        recPids.pitch.f = Math.min(220, Math.round(recPids.pitch.f * 1.08));
       }
     }
 
@@ -328,50 +363,149 @@ class TuningEngine {
       const rOS = rollMetrics.overshootPercent;
       const rRise = rollMetrics.riseTimeMs;
       const rBounce = rollMetrics.bounceDepthPercent;
+      const rLat = rollMetrics.latencyMs || 8;
+      const targetOS = baseline.targetOvershootPct || 6.5;
 
-      if (rOS > 14 || rBounce > 7 || symptoms.includes('bounceback')) {
+      if (rOS > 10 || rBounce > 5.5 || symptoms.includes('bounceback')) {
+        const excessOS = Math.max(2, rOS - targetOS);
+        const excessBounce = Math.max(0, rBounce - 3);
+        const dBoost = Math.min(1.26, 1.05 + excessOS * 0.008 + excessBounce * 0.006);
+
         diagnoses.push({
           title: "Roll Ringing & Bounce-Back (Underdamped)",
-          description: `Roll overshoot is ${rOS}% with ${rBounce}% ringing depth. Needs higher damping or tuned FF.`,
+          description: `Roll overshoot is ${rOS}% with ${rBounce}% ringing depth (damping ratio ${rollMetrics.zeta}). Scaling Roll D-gain by +${Math.round((dBoost - 1) * 100)}% for clean snap stops.`,
           type: "warning"
         });
 
         if (!isHighNoise) {
-          recPids.roll.d = Math.min(52, Math.round(recPids.roll.d * 1.16));
-          recPids.roll.dMax = Math.min(60, Math.round(recPids.roll.dMax * 1.18));
+          recPids.roll.d = Math.min(58, Math.round(recPids.roll.d * dBoost));
+          recPids.roll.dMax = Math.min(68, Math.round(recPids.roll.dMax * (dBoost + 0.03)));
+          if (rRise < baseline.targetRiseTimeMs * 0.90 && rOS > 13) {
+            recPids.roll.f = Math.round(recPids.roll.f * 0.92);
+          }
         } else {
           recPids.roll.p = Math.round(recPids.roll.p * 0.92);
           recPids.roll.f = Math.round(recPids.roll.f * 0.88);
         }
-      } else if (rRise > baseline.targetRiseTimeMs * 1.25 && rOS < 4) {
+      } else if (rRise > baseline.targetRiseTimeMs * 1.15 && rOS < 5.5) {
+        const riseRatio = Math.min(1.6, rRise / baseline.targetRiseTimeMs);
+        const pBoost = Math.min(1.22, 1.04 + (riseRatio - 1.0) * 0.30);
+        const fBoost = Math.min(1.24, 1.05 + (riseRatio - 1.0) * 0.34);
+
         diagnoses.push({
           title: "Roll Sluggish Response (Overdamped)",
-          description: `Roll rise time is ${rRise}ms. Quad takes too long to reach commanded stick rate.`,
+          description: `Roll rise time is ${rRise}ms (target ~${baseline.targetRiseTimeMs}ms). Boosting Roll P (+${Math.round((pBoost - 1) * 100)}%) and Feedforward (+${Math.round((fBoost - 1) * 100)}%).`,
           type: "info"
         });
-        recPids.roll.p = Math.round(recPids.roll.p * 1.14);
-        recPids.roll.f = Math.round(recPids.roll.f * 1.15);
+        recPids.roll.p = Math.min(90, Math.round(recPids.roll.p * pBoost));
+        recPids.roll.f = Math.min(210, Math.round(recPids.roll.f * fBoost));
+      } else {
+        const riseErr = (rRise - baseline.targetRiseTimeMs) / baseline.targetRiseTimeMs;
+        const osErr = (rOS - targetOS) / 100;
+        if (Math.abs(riseErr) > 0.05 || Math.abs(osErr) > 0.02) {
+          recPids.roll.p = Math.round(recPids.roll.p * (1 + riseErr * 0.16 - osErr * 0.14));
+          if (!isHighNoise) {
+            recPids.roll.d = Math.round(recPids.roll.d * (1 + osErr * 0.42));
+          }
+          recPids.roll.f = Math.round(recPids.roll.f * (1 + riseErr * 0.20 - osErr * 0.18));
+        }
       }
+
+      if (rLat > 13 && !isHighNoise) {
+        recPids.roll.f = Math.min(210, Math.round(recPids.roll.f * 1.07));
+      }
+    }
+
+    // C. Yaw Axis Authority & Coordination Evaluation
+    if (yawMetrics) {
+      const yOS = yawMetrics.overshootPercent;
+      const yRise = yawMetrics.riseTimeMs;
+      const ySettle = yawMetrics.settlingTimeMs || 110;
+      const targetYawRise = Math.round(baseline.targetRiseTimeMs * 1.35);
+
+      if (yRise > targetYawRise * 1.2) {
+        const yBoost = Math.min(1.20, 1.05 + ((yRise - targetYawRise) / targetYawRise) * 0.25);
+        diagnoses.push({
+          title: "Yaw Authority & Stick Coordination",
+          description: `Yaw rise time is ${yRise}ms (target ~${targetYawRise}ms). Increasing Yaw P and Feedforward for crisper flat turns and coordinated rolls.`,
+          type: "info"
+        });
+        recPids.yaw.p = Math.min(85, Math.round(recPids.yaw.p * yBoost));
+        recPids.yaw.f = Math.min(180, Math.round(recPids.yaw.f * (yBoost + 0.03)));
+      } else if (yOS > 14) {
+        diagnoses.push({
+          title: "Yaw Stop Overshoot",
+          description: `Yaw exhibits ${yOS}% overshoot after rudder release. Trimming Yaw Feedforward and increasing Yaw I-term for locked heading hold.`,
+          type: "warning"
+        });
+        recPids.yaw.f = Math.round(recPids.yaw.f * 0.88);
+        recPids.yaw.i = Math.min(130, Math.round(recPids.yaw.i * 1.08));
+      }
+
+      if (ySettle > 150) {
+        recPids.yaw.i = Math.min(130, Math.round(recPids.yaw.i * 1.06));
+      }
+    }
+
+    // D. Roll / Pitch Inertia Symmetry & Steady-State Hold (I-Term)
+    if (rollMetrics && pitchMetrics) {
+      const asymMs = pitchMetrics.riseTimeMs - rollMetrics.riseTimeMs;
+      if (asymMs > 12) {
+        diagnoses.push({
+          title: "Pitch-to-Roll Inertia Imbalance",
+          description: `Pitch responds ${asymMs.toFixed(0)}ms slower than Roll due to battery/camera longitudinal mass distribution. Raising Pitch P/I ratio to match Roll agility.`,
+          type: "info"
+        });
+        recPids.pitch.p = Math.min(95, Math.round(recPids.pitch.p * 1.06));
+        recPids.pitch.i = Math.min(135, Math.round(recPids.pitch.i * 1.06));
+      }
+
+      // Steady-state settling -> I-gain calibration
+      if (pitchMetrics.settlingTimeMs > baseline.targetRiseTimeMs * 3.0) {
+        recPids.pitch.i = Math.min(135, Math.round(recPids.pitch.i * 1.08));
+      }
+      if (rollMetrics.settlingTimeMs > baseline.targetRiseTimeMs * 3.0) {
+        recPids.roll.i = Math.min(130, Math.round(recPids.roll.i * 1.07));
+      }
+    }
+
+    // E. Mid-Band Frame Resonance Detection (60-200Hz)
+    const midBandMax = Math.max(
+      (noise.pitch && noise.pitch.bands && noise.pitch.bands.midBandPct) || 0,
+      (noise.roll && noise.roll.bands && noise.roll.bands.midBandPct) || 0
+    );
+    if (midBandMax > 26) {
+      const peakFreq = (noise.pitch && noise.pitch.peaks && noise.pitch.peaks[0] && noise.pitch.peaks[0].frequency) || 145;
+      diagnoses.push({
+        title: `Mid-Band Frame Resonance (${Math.round(peakFreq)} Hz)`,
+        description: `Significant spectral energy (${midBandMax}%) in the 60–200Hz frame resonance band. Check arm hardware bolts and battery strap tightness; Dynamic Notch filter is actively attenuating this mode.`,
+        type: "warning"
+      });
     }
 
     // 3. Propwash Analysis
     const hasPropwashSymptom = symptoms.includes('propwash');
-    const rollPropwash = noise.roll && noise.roll.bands && noise.roll.bands.propwashIndex > 0.22;
+    const propwashIdx = Math.max(
+      (noise.roll && noise.roll.bands && noise.roll.bands.propwashIndex) || 0,
+      (noise.pitch && noise.pitch.bands && noise.pitch.bands.propwashIndex) || 0
+    );
+    const rollPropwash = propwashIdx > 0.22;
     if (hasPropwashSymptom || rollPropwash) {
       diagnoses.push({
         title: "Propwash Oscillations in Dirty Air",
-        description: "Low-throttle descent turbulence detected. Tuning D-gain, D-max boost, and dynamic idle for propwash rejection.",
+        description: `Low-throttle descent turbulence detected (Propwash Index ${propwashIdx.toFixed(2)}). Tuning D-gain, D-max boost, and dynamic idle for propwash rejection.`,
         type: "warning"
       });
 
       if (!isHighNoise) {
-        recPids.roll.d = Math.max(recPids.roll.d, Math.round(recPids.roll.d * 1.10));
-        recPids.pitch.d = Math.max(recPids.pitch.d, Math.round(recPids.pitch.d * 1.10));
-        recPids.roll.dMax = Math.max(recPids.roll.dMax, Math.round(recPids.roll.dMax * 1.14));
-        recPids.pitch.dMax = Math.max(recPids.pitch.dMax, Math.round(recPids.pitch.dMax * 1.14));
+        const pwScale = Math.min(1.18, 1.06 + propwashIdx * 0.22);
+        recPids.roll.d = Math.max(recPids.roll.d, Math.round(recPids.roll.d * pwScale));
+        recPids.pitch.d = Math.max(recPids.pitch.d, Math.round(recPids.pitch.d * pwScale));
+        recPids.roll.dMax = Math.max(recPids.roll.dMax, Math.round(recPids.roll.dMax * (pwScale + 0.04)));
+        recPids.pitch.dMax = Math.max(recPids.pitch.dMax, Math.round(recPids.pitch.dMax * (pwScale + 0.04)));
       }
-      recDynamicIdle = Math.min(55, Math.round(recDynamicIdle * 1.20));
-      recAntiGravity = Math.min(5000, Math.round(recAntiGravity * 1.15));
+      recDynamicIdle = Math.min(55, Math.round(recDynamicIdle * 1.18));
+      recAntiGravity = Math.min(5000, Math.round(recAntiGravity * 1.12));
     }
 
     // 4. Punchout Drift / Anti-Gravity
@@ -431,40 +565,87 @@ class TuningEngine {
     this.addDiff(diffList, "D-Term Filter Slider", current.dtermFilterSlider, recDtermSlider, "x", "D-term noise filtering / motor heat");
     this.addDiff(diffList, "Dynamic Idle (RPM)", current.dynamicIdle, recDynamicIdle, "00 RPM", "Prevents motor stalling in propwash");
 
-    // Continuous, data-driven Flight Tune Health Score (0 to 100)
+    // Continuous, highly-sensitive Flight Tune Health Score (0 to 100)
     let score = 96.0;
     if (pitchMetrics) {
       const pDampErr = Math.abs(pitchMetrics.zeta - 0.707);
-      score -= pDampErr * 24.0;
-      if (pitchMetrics.overshootPercent > 5.0) {
-        score -= (pitchMetrics.overshootPercent - 5.0) * 1.1;
+      score -= pDampErr * 28.0;
+      if (pitchMetrics.overshootPercent > 4.0) {
+        score -= (pitchMetrics.overshootPercent - 4.0) * 1.25;
       }
-      if (pitchMetrics.bounceDepthPercent > 3.0) {
-        score -= (pitchMetrics.bounceDepthPercent - 3.0) * 1.5;
+      if (pitchMetrics.bounceDepthPercent > 2.0) {
+        score -= (pitchMetrics.bounceDepthPercent - 2.0) * 1.65;
       }
-      if (pitchMetrics.riseTimeMs > baseline.targetRiseTimeMs) {
-        score -= ((pitchMetrics.riseTimeMs - baseline.targetRiseTimeMs) / baseline.targetRiseTimeMs) * 18.0;
+      const pRiseDiff = Math.abs(pitchMetrics.riseTimeMs - baseline.targetRiseTimeMs);
+      score -= (pRiseDiff / baseline.targetRiseTimeMs) * 19.0;
+      if (pitchMetrics.trackingScore !== undefined) {
+        score -= (100 - pitchMetrics.trackingScore) * 0.18;
       }
     }
     if (rollMetrics) {
       const rDampErr = Math.abs(rollMetrics.zeta - 0.707);
-      score -= rDampErr * 20.0;
-      if (rollMetrics.overshootPercent > 5.0) {
-        score -= (rollMetrics.overshootPercent - 5.0) * 1.0;
+      score -= rDampErr * 24.0;
+      if (rollMetrics.overshootPercent > 4.0) {
+        score -= (rollMetrics.overshootPercent - 4.0) * 1.15;
       }
-      if (rollMetrics.bounceDepthPercent > 3.0) {
-        score -= (rollMetrics.bounceDepthPercent - 3.0) * 1.3;
+      if (rollMetrics.bounceDepthPercent > 2.0) {
+        score -= (rollMetrics.bounceDepthPercent - 2.0) * 1.45;
+      }
+      const rRiseDiff = Math.abs(rollMetrics.riseTimeMs - baseline.targetRiseTimeMs);
+      score -= (rRiseDiff / baseline.targetRiseTimeMs) * 15.0;
+      if (rollMetrics.trackingScore !== undefined) {
+        score -= (100 - rollMetrics.trackingScore) * 0.15;
       }
     }
-    if (isHighNoise) score -= 28.0;
-    else if (isElevatedNoise) score -= 14.0;
-    else if (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.peakPowerDb) {
-      const pDb = noise.pitch.metrics.peakPowerDb;
-      if (pDb > -20) score -= (pDb + 20) * 0.4;
+    if (yawMetrics) {
+      if (yawMetrics.overshootPercent > 8.0) {
+        score -= (yawMetrics.overshootPercent - 8.0) * 0.5;
+      }
     }
+    if (isHighNoise) {
+      score -= 26.0;
+    } else if (isElevatedNoise) {
+      score -= 13.0;
+    }
+    // Continuous spectral noise floor contribution (-60dB clean to -15dB noisy)
+    const avgHighDb = (
+      ((noise.pitch && noise.pitch.metrics && noise.pitch.metrics.highFreqAvgDb) || -45) +
+      ((noise.roll && noise.roll.metrics && noise.roll.metrics.highFreqAvgDb) || -45)
+    ) / 2;
+    score -= Math.max(0, (avgHighDb + 52) * 0.28);
+
+    // Propwash index contribution
+    score -= Math.max(0, (propwashIdx - 0.10) * 22.0);
+
     if (symptoms.length > 0) score -= symptoms.length * 4.0;
 
-    const overallHealth = Math.round(Math.max(25, Math.min(99, score)));
+    const overallHealth = Math.round(Math.max(22, Math.min(99, score)));
+
+    // Dynamic Health Description & Propwash Score
+    let healthDescription = "Balanced Closed-Loop Tracking";
+    if (isHighNoise) {
+      healthDescription = "Critical D-Term Noise & Thermal Risk";
+    } else if (pitchMetrics && (pitchMetrics.overshootPercent > 13 || pitchMetrics.bounceDepthPercent > 6)) {
+      healthDescription = "Underdamped with Pitch Bounce-Back";
+    } else if (rollMetrics && (rollMetrics.overshootPercent > 12 || rollMetrics.bounceDepthPercent > 5.5)) {
+      healthDescription = "Underdamped with Roll Stop Ringing";
+    } else if (rollPropwash || hasPropwashSymptom) {
+      healthDescription = "Elevated Propwash Descent Turbulence";
+    } else if (pitchMetrics && pitchMetrics.riseTimeMs > baseline.targetRiseTimeMs * 1.2) {
+      healthDescription = "Overdamped / Sluggish Stick Response";
+    } else if (isElevatedNoise) {
+      healthDescription = "Moderate High-Frequency Motor Harmonics";
+    } else if (overallHealth >= 84) {
+      healthDescription = "Crisp, Well-Damped Flight Tune";
+    } else {
+      healthDescription = "Good Baseline — Minor Gain Optimization";
+    }
+
+    const propwashScoreVal = Math.round(Math.max(35, Math.min(98, 100 - propwashIdx * 125 - (isHighNoise ? 15 : 0))));
+    const propwashLabel = propwashScoreVal >= 85 ? `Excellent (${propwashScoreVal}%)`
+                        : propwashScoreVal >= 70 ? `Good (${propwashScoreVal}%)`
+                        : propwashScoreVal >= 55 ? `Moderate (${propwashScoreVal}%)`
+                        : `Poor (${propwashScoreVal}%)`;
 
     // Generate Betaflight CLI Script with Log Provenance
     const logInfo = input.logInfo || {};
@@ -487,6 +668,9 @@ class TuningEngine {
 
     return {
       overallHealth,
+      healthDescription,
+      propwashScore: propwashScoreVal,
+      propwashLabel,
       diagnoses,
       warnings,
       diffList,
@@ -661,6 +845,7 @@ class TuningEngine {
         extracted.pids.roll.p = parts[0];
         extracted.pids.roll.i = parts[1];
         extracted.pids.roll.d = parts[2];
+        extracted.pids.roll.dMax = Math.max(parts[2], Math.round(parts[2] * 1.18));
         if (parts[3] !== undefined && !isNaN(parts[3])) extracted.pids.roll.f = parts[3];
         hasAnyPid = true;
       }
@@ -671,6 +856,7 @@ class TuningEngine {
         extracted.pids.pitch.p = parts[0];
         extracted.pids.pitch.i = parts[1];
         extracted.pids.pitch.d = parts[2];
+        extracted.pids.pitch.dMax = Math.max(parts[2], Math.round(parts[2] * 1.18));
         if (parts[3] !== undefined && !isNaN(parts[3])) extracted.pids.pitch.f = parts[3];
         hasAnyPid = true;
       }
@@ -686,19 +872,51 @@ class TuningEngine {
       }
     }
 
+    // Betaflight BBL headers: d_min (D-term steady state) and feedforward_weight
+    if (metadata.d_min) {
+      const dMins = metadata.d_min.split(',').map(s => parseInt(s, 10));
+      if (dMins.length >= 2 && !isNaN(dMins[0]) && dMins[0] > 0) {
+        // In Betaflight, rollPID[2] is D-max and d_min[0] is base D!
+        extracted.pids.roll.dMax = extracted.pids.roll.d;
+        extracted.pids.roll.d = dMins[0];
+        if (dMins[1] > 0) {
+          extracted.pids.pitch.dMax = extracted.pids.pitch.d;
+          extracted.pids.pitch.d = dMins[1];
+        }
+      }
+    }
+    if (metadata.feedforward_weight || metadata.ff_weight) {
+      const ffs = (metadata.feedforward_weight || metadata.ff_weight).split(',').map(s => parseInt(s, 10));
+      if (ffs.length >= 3 && !isNaN(ffs[0])) {
+        extracted.pids.roll.f = ffs[0];
+        extracted.pids.pitch.f = ffs[1];
+        extracted.pids.yaw.f = ffs[2];
+        hasAnyPid = true;
+      }
+    }
+
     const checkNum = (k) => metadata[k] !== undefined ? parseFloat(metadata[k]) : null;
-    if (checkNum('p_pitch')) { extracted.pids.pitch.p = Math.round(checkNum('p_pitch')); hasAnyPid = true; }
-    if (checkNum('i_pitch')) { extracted.pids.pitch.i = Math.round(checkNum('i_pitch')); hasAnyPid = true; }
-    if (checkNum('d_pitch')) { extracted.pids.pitch.d = Math.round(checkNum('d_pitch')); hasAnyPid = true; }
-    if (checkNum('f_pitch')) { extracted.pids.pitch.f = Math.round(checkNum('f_pitch')); hasAnyPid = true; }
+    if (checkNum('p_pitch') !== null) { extracted.pids.pitch.p = Math.round(checkNum('p_pitch')); hasAnyPid = true; }
+    if (checkNum('i_pitch') !== null) { extracted.pids.pitch.i = Math.round(checkNum('i_pitch')); hasAnyPid = true; }
+    if (checkNum('d_pitch') !== null) { extracted.pids.pitch.d = Math.round(checkNum('d_pitch')); hasAnyPid = true; }
+    if (checkNum('f_pitch') !== null) { extracted.pids.pitch.f = Math.round(checkNum('f_pitch')); hasAnyPid = true; }
 
-    if (checkNum('p_roll')) { extracted.pids.roll.p = Math.round(checkNum('p_roll')); hasAnyPid = true; }
-    if (checkNum('i_roll')) { extracted.pids.roll.i = Math.round(checkNum('i_roll')); hasAnyPid = true; }
-    if (checkNum('d_roll')) { extracted.pids.roll.d = Math.round(checkNum('d_roll')); hasAnyPid = true; }
-    if (checkNum('f_roll')) { extracted.pids.roll.f = Math.round(checkNum('f_roll')); hasAnyPid = true; }
+    if (checkNum('p_roll') !== null) { extracted.pids.roll.p = Math.round(checkNum('p_roll')); hasAnyPid = true; }
+    if (checkNum('i_roll') !== null) { extracted.pids.roll.i = Math.round(checkNum('i_roll')); hasAnyPid = true; }
+    if (checkNum('d_roll') !== null) { extracted.pids.roll.d = Math.round(checkNum('d_roll')); hasAnyPid = true; }
+    if (checkNum('f_roll') !== null) { extracted.pids.roll.f = Math.round(checkNum('f_roll')); hasAnyPid = true; }
 
-    if (checkNum('master_multiplier')) extracted.masterMultiplier = checkNum('master_multiplier');
-    if (checkNum('anti_gravity_gain')) extracted.antiGravity = Math.round(checkNum('anti_gravity_gain'));
+    if (checkNum('master_multiplier') !== null) extracted.masterMultiplier = checkNum('master_multiplier');
+    if (checkNum('anti_gravity_gain') !== null) extracted.antiGravity = Math.round(checkNum('anti_gravity_gain'));
+    if (checkNum('tpa_rate') !== null) {
+      const tr = checkNum('tpa_rate');
+      extracted.tpaRate = +(tr > 1 ? tr / 100 : tr).toFixed(2);
+    }
+    if (checkNum('tpa_breakpoint') !== null) extracted.tpaBreakpoint = Math.round(checkNum('tpa_breakpoint'));
+    if (checkNum('dyn_idle_min_rpm') !== null) {
+      const di = checkNum('dyn_idle_min_rpm');
+      extracted.dynamicIdle = di > 200 ? Math.round(di / 100) : Math.round(di);
+    }
 
     return hasAnyPid ? extracted : null;
   }
