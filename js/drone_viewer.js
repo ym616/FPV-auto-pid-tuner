@@ -292,9 +292,9 @@ class DroneOrientationViewer {
       // Stick deflections normalized to [-1, +1]
       const rStick = Math.max(-1, Math.min(1, (rollRcs[i] || 0) / rollScale));
       const pStick = Math.max(-1, Math.min(1, (pitchRcs[i] || 0) / pitchScale));
-      // If yawRcs is raw rcCommand[2], invert sign so right stick = positive (+1); if setpoint, keep positive
-      const isRawYawRc = summary.columnMap && !summary.columnMap.yawSetpointIsDeg && summary.columnMap.yawRc !== undefined;
-      const yStick = Math.max(-1, Math.min(1, ((yawRcs[i] || 0) * (isRawYawRc ? -1 : 1)) / yawScale));
+      // In raw BBL binary frames, rcCommand[2] is inverted (-rcCommand[2] = right yaw); in CSV exports, positive = right yaw
+      const isInvertedYawRc = summary.fileType === 'BBL_BINARY' && summary.columnMap && !summary.columnMap.yawSetpointIsDeg;
+      const yStick = Math.max(-1, Math.min(1, ((yawRcs[i] || 0) * (isInvertedYawRc ? -1 : 1)) / yawScale));
 
       this.trajectory[i] = {
         time: times[i],

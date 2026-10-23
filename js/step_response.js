@@ -86,18 +86,18 @@ class StepResponseAnalyzer {
       }
     }
 
-    // 3. Also compute full-flight closed-loop deconvolved response (PIDtoolbox-style system identification)
-    const continuousResult = this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs);
-
+    // 3. If no isolated step flicks were found, use continuous closed-loop identification
     if (normalizedCurves.length === 0) {
-      return continuousResult;
+      return this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs);
     }
 
-    // 4. Compute trimmed ensemble curve from isolated stick steps and blend with continuous deconvolution
-    // so arbitrary freestyle maneuvers never produce wild step artifacts
+    // 4. Compute ensemble curve from isolated stick steps (blend lightly with continuous ID only when a single step was found)
+    const continuousResult = normalizedCurves.length < 2
+      ? this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs)
+      : null;
+
     const ensembleCurve = [];
     const timeAxisMs = [];
-    const contCurve = continuousResult.responseCurve;
 
     for (let s = 0; s < totalWindowSamples; s++) {
       const tMs = ((s - preSamples) / this.sampleRate) * 1000;
@@ -106,12 +106,16 @@ class StepResponseAnalyzer {
       const valsAtS = normalizedCurves.map(c => c[s]).sort((a, b) => a - b);
       const medianVal = valsAtS[Math.floor(valsAtS.length / 2)];
 
-      // Map post-onset index to continuous curve for stabilized blending
       if (s >= preSamples) {
-        const postFrac = (s - preSamples) / Math.max(1, postSamples - 1);
-        const contIdx = Math.min(contCurve.length - 1, Math.round(postFrac * (contCurve.length - 1)));
-        const blended = medianVal * 0.65 + contCurve[contIdx] * 0.35;
-        ensembleCurve.push(+blended.toFixed(4));
+        if (continuousResult) {
+          const contCurve = continuousResult.responseCurve;
+          const postFrac = (s - preSamples) / Math.max(1, postSamples - 1);
+          const contIdx = Math.min(contCurve.length - 1, Math.round(postFrac * (contCurve.length - 1)));
+          const blended = medianVal * 0.80 + contCurve[contIdx] * 0.20;
+          ensembleCurve.push(+blended.toFixed(4));
+        } else {
+          ensembleCurve.push(+medianVal.toFixed(4));
+        }
       } else {
         ensembleCurve.push(+(medianVal * 0.5).toFixed(4));
       }

@@ -27,10 +27,10 @@ const DemoFlightData = {
         dynamicIdle: 40
       },
       params: {
-        rollOvershoot: 1.22,
-        pitchOvershoot: 1.26,
+        rollOvershoot: 1.24,
+        pitchOvershoot: 1.28,
         bounceDepth: 0.16,
-        riseTimeSec: 0.034,
+        riseTimeSec: 0.032,
         noiseAmp: 1.2,
         resonanceHz: 210,
         propwashAmp: 0.15
@@ -58,13 +58,13 @@ const DemoFlightData = {
         dynamicIdle: 25
       },
       params: {
-        rollOvershoot: 1.10,
-        pitchOvershoot: 1.12,
+        rollOvershoot: 1.12,
+        pitchOvershoot: 1.14,
         bounceDepth: 0.08,
-        riseTimeSec: 0.048,
+        riseTimeSec: 0.044,
         noiseAmp: 1.5,
         resonanceHz: 195,
-        propwashAmp: 0.85 // High propwash oscillation
+        propwashAmp: 0.95 // High propwash oscillation
       }
     },
 
@@ -121,9 +121,9 @@ const DemoFlightData = {
       },
       params: {
         rollOvershoot: 1.01,
-        pitchOvershoot: 1.02,
+        pitchOvershoot: 1.015,
         bounceDepth: 0.01,
-        riseTimeSec: 0.085, // Very slow rise time
+        riseTimeSec: 0.068, // Very slow rise time
         noiseAmp: 0.8,
         resonanceHz: 160,
         propwashAmp: 0.20
@@ -133,7 +133,7 @@ const DemoFlightData = {
     'golden_tune_5in': {
       id: 'golden_tune_5in',
       name: '5" Freestyle 6S — Baseline Reference',
-      description: 'Balanced response with 36ms rise time, 6% overshoot, and clean noise spectrum.',
+      description: 'Balanced response with 36ms rise time, 5% overshoot, and clean noise spectrum.',
       quadType: '5in_freestyle_6s',
       symptoms: [],
       config: {
@@ -151,13 +151,13 @@ const DemoFlightData = {
         dynamicIdle: 42
       },
       params: {
-        rollOvershoot: 1.06,
-        pitchOvershoot: 1.07,
-        bounceDepth: 0.02,
-        riseTimeSec: 0.036,
-        noiseAmp: 1.1,
+        rollOvershoot: 1.045,
+        pitchOvershoot: 1.05,
+        bounceDepth: 0.015,
+        riseTimeSec: 0.035,
+        noiseAmp: 0.45,
         resonanceHz: 215,
-        propwashAmp: 0.10
+        propwashAmp: 0.04
       }
     }
   },
@@ -196,15 +196,24 @@ const DemoFlightData = {
     lines.push(headers.join(','));
 
     // Flight choreography:
-    // 0-2s: steady hover (throttle ~1350)
-    // 2-3s: sharp Roll flick right (+450 deg/s) and snap back
-    // 4-5s: sharp Pitch flip forward (+500 deg/s) and snap back
-    // 6-8s: 180° dive turn (throttle drops to 1050, high yaw + roll, tests propwash)
-    // 8-10s: punchout (throttle 1900)
-    // 10-12s: smooth cruise
-    let currentRollGyro = 0;
-    let currentPitchGyro = 0;
-    let currentYawGyro = 0;
+    // 0-1.5s: steady hover (throttle ~1350)
+    // 1.5-2.0s: sharp Roll flick right (+420 deg/s) and snap back
+    // 2.8-3.3s: sharp Pitch flip forward (+480 deg/s) and snap back
+    // 4.2-4.7s: sharp Roll flick left (-380 deg/s) and snap back
+    // 5.4-5.9s: sharp Pitch flip back (-440 deg/s) and snap back
+    // 6.6-8.2s: 180° dive turn (throttle drops to 1050, high yaw + roll, tests propwash)
+    // 8.8-9.8s: punchout (throttle 1920)
+    let currentRollGyro = 0, rollVel = 0;
+    let currentPitchGyro = 0, pitchVel = 0;
+    let currentYawGyro = 0, yawVel = 0;
+
+    // 2nd-order natural frequency omega_n and damping ratio zeta derived from scenario params
+    const osRoll = Math.max(0.005, p.rollOvershoot - 1.0);
+    const osPitch = Math.max(0.005, p.pitchOvershoot - 1.0);
+    const zetaRoll = -Math.log(osRoll) / Math.sqrt(Math.PI * Math.PI + Math.pow(Math.log(osRoll), 2));
+    const zetaPitch = -Math.log(osPitch) / Math.sqrt(Math.PI * Math.PI + Math.pow(Math.log(osPitch), 2));
+    const omegaRoll = (1.1 + 1.1 * zetaRoll + 1.4 * zetaRoll * zetaRoll) / Math.max(0.018, p.riseTimeSec);
+    const omegaPitch = (1.1 + 1.1 * zetaPitch + 1.4 * zetaPitch * zetaPitch) / Math.max(0.018, p.riseTimeSec * 1.04);
 
     for (let i = 0; i < totalSamples; i++) {
       const t = i * dt;
@@ -215,61 +224,52 @@ const DemoFlightData = {
       let rcYaw = 0;
       let rcThrottle = 1350; // hover
 
-      // Event 1: Roll flick at 2.0s to 2.4s
-      if (t >= 2.0 && t <= 2.35) {
+      if (t >= 1.5 && t <= 1.95) {
         rcRoll = 420;
-      }
-      // Event 2: Pitch flick at 4.2s to 4.55s
-      else if (t >= 4.2 && t <= 4.55) {
+      } else if (t >= 2.8 && t <= 3.25) {
         rcPitch = 480;
-      }
-      // Event 3: Propwash dive turn at 6.5s to 7.8s
-      else if (t >= 6.5 && t <= 7.8) {
+      } else if (t >= 4.2 && t <= 4.65) {
+        rcRoll = -380;
+      } else if (t >= 5.4 && t <= 5.85) {
+        rcPitch = -440;
+      } else if (t >= 6.6 && t <= 8.2) {
         rcThrottle = 1050; // throttle cut!
         rcYaw = 280;
         rcRoll = -180;
-      }
-      // Event 4: Full punchout at 8.5s to 9.3s
-      else if (t >= 8.5 && t <= 9.3) {
+      } else if (t >= 8.8 && t <= 9.8) {
         rcThrottle = 1920;
+        rcYaw = -160;
       }
 
-      // Gyro Dynamics Simulation
-      // Roll tracking
-      const rollTarget = rcRoll;
-      const rollErr = rollTarget - currentRollGyro;
-      const rollAccel = (rollErr * (1 / p.riseTimeSec) * 2.2);
-      currentRollGyro += rollAccel * dt;
+      // True 2nd-Order Closed-Loop Gyro Dynamics: y'' + 2*zeta*wn*y' + wn^2*(y - u) = 0
+      const rollErr = rcRoll - currentRollGyro;
+      const rollAccel = (omegaRoll * omegaRoll * rollErr) - (2 * zetaRoll * omegaRoll * rollVel);
+      rollVel += rollAccel * dt;
+      currentRollGyro += rollVel * dt;
 
-      // Add bounce-back if underdamped when stopping
-      if (p.rollOvershoot > 1.15 && Math.abs(currentRollGyro) > Math.abs(rollTarget) && rollTarget === 0) {
-        currentRollGyro += Math.sin(t * 35) * (p.bounceDepth * 180) * Math.exp(-(t % 0.5) * 8);
-      }
+      const pitchErr = rcPitch - currentPitchGyro;
+      const pitchAccel = (omegaPitch * omegaPitch * pitchErr) - (2 * zetaPitch * omegaPitch * pitchVel);
+      pitchVel += pitchAccel * dt;
+      currentPitchGyro += pitchVel * dt;
 
-      // Pitch tracking
-      const pitchTarget = rcPitch;
-      const pitchErr = pitchTarget - currentPitchGyro;
-      const pitchAccel = (pitchErr * (1 / p.riseTimeSec) * 2.0);
-      currentPitchGyro += pitchAccel * dt;
+      const yawErr = rcYaw - currentYawGyro;
+      const yawAccel = (3200 * yawErr) - (85 * yawVel);
+      yawVel += yawAccel * dt;
+      currentYawGyro += yawVel * dt;
 
-      if (p.pitchOvershoot > 1.15 && Math.abs(currentPitchGyro) > Math.abs(pitchTarget) && pitchTarget === 0) {
-        currentPitchGyro += Math.sin(t * 30) * (p.bounceDepth * 210) * Math.exp(-(t % 0.5) * 7);
-      }
-
-      // Yaw tracking
-      currentYawGyro += (rcYaw - currentYawGyro) * 18 * dt;
-
-      // Propwash oscillation noise during low-throttle descent
+      // Propwash oscillation noise during low-throttle descent (35-90Hz band)
       let propwashNoise = 0;
-      if (rcThrottle < 1150 && (Math.abs(currentRollGyro) > 50 || Math.abs(currentYawGyro) > 50)) {
-        propwashNoise = (Math.sin(t * 55 * 2 * Math.PI) + Math.cos(t * 42 * 2 * Math.PI)) * (p.propwashAmp * 35);
+      if (rcThrottle < 1200 || p.propwashAmp > 0.4) {
+        const pwScale = rcThrottle < 1200 ? 1.0 : 0.35;
+        propwashNoise = (Math.sin(t * 58 * 2 * Math.PI) + Math.cos(t * 44 * 2 * Math.PI) + 0.6 * Math.sin(t * 72 * 2 * Math.PI)) * (p.propwashAmp * 95 * pwScale);
       }
 
-      // Motor & frame resonance noise (FFT high band)
-      const motorFreq = 200 + (rcThrottle - 1000) * 0.25;
-      const frameNoise = Math.sin(t * p.resonanceHz * 2 * Math.PI) * (p.noiseAmp * 3.5);
-      const rpmNoise = Math.sin(t * motorFreq * 2 * Math.PI) * (p.noiseAmp * 2.5);
-      const randomJitter = (Math.random() - 0.5) * p.noiseAmp * 2.0;
+      // Motor & frame resonance noise (>200Hz FFT high band)
+      const motorFreq = 220 + (rcThrottle - 1000) * 0.22;
+      const frameNoise = Math.sin(t * p.resonanceHz * 2 * Math.PI) * (p.noiseAmp * 14.0);
+      const rpmNoise = Math.sin(t * motorFreq * 2 * Math.PI) * (p.noiseAmp * 11.0) +
+                       Math.cos(t * (motorFreq * 1.35) * 2 * Math.PI) * (p.noiseAmp * 8.5);
+      const randomJitter = (Math.random() - 0.5) * p.noiseAmp * 12.0;
       const totalNoise = frameNoise + rpmNoise + randomJitter + propwashNoise;
 
       const gyroRoll = +(currentRollGyro + totalNoise).toFixed(1);

@@ -946,11 +946,11 @@ class BlackboxParser {
     }
 
     // 3. Auto-normalize Setpoints if raw stick deflection (max <= 505 stick units and not marked as deg/s)
-    if (!this.columnMap.rollSetpointIsDeg && maxRollSp > 2 && maxRollSp <= 505) {
+    if (!this.columnMap.rollSetpointIsDeg && maxRollSp > 2 && maxRollSp <= 505 && this.fileType !== 'BBL_BINARY') {
       for (let i = 0; i < this.totalSamples; i++) {
         this.roll.setpoint[i] = this.rcCommandToRate(this.roll.setpoint[i], 0);
         this.pitch.setpoint[i] = this.rcCommandToRate(this.pitch.setpoint[i], 1);
-        this.yaw.setpoint[i] = this.rcCommandToRate(-this.yaw.setpoint[i], 2);
+        this.yaw.setpoint[i] = this.rcCommandToRate(this.yaw.setpoint[i], 2);
       }
     }
 
@@ -1020,7 +1020,8 @@ class BlackboxParser {
 
     // Actual Rates (Betaflight 4.3+ default: rates_type = 3)
     // rc_rates = center sensitivity / 10 (e.g. 20 = 200 deg/s), rates = max rate / 10 (e.g. 67 = 670 deg/s)
-    if (ratesType === 3 || (rcRates[axis] < 45 && superRates[axis] >= 40)) {
+    const isActualRates = ratesType === 3 || (rcRates[0] < 45 && superRates[0] >= 40) || (rcRates[axis] < 45 && superRates[axis] >= 40);
+    if (isActualRates) {
       const centerSens = (rcRates[axis] || 20) * 10.0;
       const maxRate = Math.max(centerSens, (superRates[axis] || 67) * 10.0);
       const expof = absDef * (Math.pow(absDef, 5) * expo + absDef * (1.0 - expo));
