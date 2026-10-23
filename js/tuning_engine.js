@@ -565,61 +565,66 @@ class TuningEngine {
     this.addDiff(diffList, "D-Term Filter Slider", current.dtermFilterSlider, recDtermSlider, "x", "D-term noise filtering / motor heat");
     this.addDiff(diffList, "Dynamic Idle (RPM)", current.dynamicIdle, recDynamicIdle, "00 RPM", "Prevents motor stalling in propwash");
 
-    // Continuous, highly-sensitive Flight Tune Health Score (0 to 100)
-    let score = 96.0;
+    // Continuous, well-proportioned Flight Tune Health Score (35 to 99)
+    // Weighted across: Pitch Tracking (35%), Roll Tracking (30%), Noise Floor (20%), Propwash & Yaw (15%)
+    let pitchSubScore = 94.0;
     if (pitchMetrics) {
-      const pDampErr = Math.abs(pitchMetrics.zeta - 0.707);
-      score -= pDampErr * 28.0;
-      if (pitchMetrics.overshootPercent > 4.0) {
-        score -= (pitchMetrics.overshootPercent - 4.0) * 1.25;
-      }
-      if (pitchMetrics.bounceDepthPercent > 2.0) {
-        score -= (pitchMetrics.bounceDepthPercent - 2.0) * 1.65;
-      }
-      const pRiseDiff = Math.abs(pitchMetrics.riseTimeMs - baseline.targetRiseTimeMs);
-      score -= (pRiseDiff / baseline.targetRiseTimeMs) * 19.0;
-      if (pitchMetrics.trackingScore !== undefined) {
-        score -= (100 - pitchMetrics.trackingScore) * 0.18;
-      }
+      const pDampErr = Math.min(0.40, Math.abs((pitchMetrics.zeta || 0.707) - 0.707));
+      const pOsExcess = Math.min(28.0, Math.max(0, (pitchMetrics.overshootPercent || 0) - 5.0));
+      const pBounceExcess = Math.min(20.0, Math.max(0, (pitchMetrics.bounceDepthPercent || 0) - 2.5));
+      const pRiseRatio = Math.min(0.85, Math.abs((pitchMetrics.riseTimeMs || baseline.targetRiseTimeMs) - baseline.targetRiseTimeMs) / Math.max(20, baseline.targetRiseTimeMs));
+
+      pitchSubScore = 98.0
+        - pDampErr * 42.0
+        - pOsExcess * 1.15
+        - pBounceExcess * 1.35
+        - pRiseRatio * 24.0;
+      pitchSubScore = Math.max(32, Math.min(99, pitchSubScore));
     }
+
+    let rollSubScore = 94.0;
     if (rollMetrics) {
-      const rDampErr = Math.abs(rollMetrics.zeta - 0.707);
-      score -= rDampErr * 24.0;
-      if (rollMetrics.overshootPercent > 4.0) {
-        score -= (rollMetrics.overshootPercent - 4.0) * 1.15;
-      }
-      if (rollMetrics.bounceDepthPercent > 2.0) {
-        score -= (rollMetrics.bounceDepthPercent - 2.0) * 1.45;
-      }
-      const rRiseDiff = Math.abs(rollMetrics.riseTimeMs - baseline.targetRiseTimeMs);
-      score -= (rRiseDiff / baseline.targetRiseTimeMs) * 15.0;
-      if (rollMetrics.trackingScore !== undefined) {
-        score -= (100 - rollMetrics.trackingScore) * 0.15;
-      }
+      const rDampErr = Math.min(0.40, Math.abs((rollMetrics.zeta || 0.707) - 0.707));
+      const rOsExcess = Math.min(28.0, Math.max(0, (rollMetrics.overshootPercent || 0) - 5.0));
+      const rBounceExcess = Math.min(20.0, Math.max(0, (rollMetrics.bounceDepthPercent || 0) - 2.5));
+      const rRiseRatio = Math.min(0.85, Math.abs((rollMetrics.riseTimeMs || baseline.targetRiseTimeMs) - baseline.targetRiseTimeMs) / Math.max(20, baseline.targetRiseTimeMs));
+
+      rollSubScore = 98.0
+        - rDampErr * 38.0
+        - rOsExcess * 1.05
+        - rBounceExcess * 1.25
+        - rRiseRatio * 22.0;
+      rollSubScore = Math.max(32, Math.min(99, rollSubScore));
     }
-    if (yawMetrics) {
-      if (yawMetrics.overshootPercent > 8.0) {
-        score -= (yawMetrics.overshootPercent - 8.0) * 0.5;
-      }
-    }
-    if (isHighNoise) {
-      score -= 26.0;
-    } else if (isElevatedNoise) {
-      score -= 13.0;
-    }
-    // Continuous spectral noise floor contribution (-60dB clean to -15dB noisy)
+
+    // Spectral Noise Sub-score (0 to 100)
     const avgHighDb = (
-      ((noise.pitch && noise.pitch.metrics && noise.pitch.metrics.highFreqAvgDb) || -45) +
-      ((noise.roll && noise.roll.metrics && noise.roll.metrics.highFreqAvgDb) || -45)
+      ((noise.pitch && noise.pitch.metrics && noise.pitch.metrics.highFreqAvgDb) ?? -45) +
+      ((noise.roll && noise.roll.metrics && noise.roll.metrics.highFreqAvgDb) ?? -45)
     ) / 2;
-    score -= Math.max(0, (avgHighDb + 52) * 0.28);
+    let noiseSubScore = 98.0 - Math.max(0, Math.min(45, (avgHighDb + 50) * 1.15));
+    if (isHighNoise) noiseSubScore -= 18.0;
+    else if (isElevatedNoise) noiseSubScore -= 8.0;
+    noiseSubScore = Math.max(28, Math.min(99, noiseSubScore));
 
-    // Propwash index contribution
-    score -= Math.max(0, (propwashIdx - 0.10) * 22.0);
+    // Propwash & Yaw Sub-score (0 to 100)
+    let stabilitySubScore = 96.0 - Math.min(38, Math.max(0, (propwashIdx - 0.08) * 75.0));
+    if (yawMetrics && yawMetrics.overshootPercent > 8.0) {
+      stabilitySubScore -= Math.min(14, (yawMetrics.overshootPercent - 8.0) * 0.6);
+    }
+    stabilitySubScore = Math.max(35, Math.min(99, stabilitySubScore));
 
-    if (symptoms.length > 0) score -= symptoms.length * 4.0;
+    let compositeScore =
+      pitchSubScore * 0.36 +
+      rollSubScore * 0.30 +
+      noiseSubScore * 0.20 +
+      stabilitySubScore * 0.14;
 
-    const overallHealth = Math.round(Math.max(22, Math.min(99, score)));
+    if (symptoms.length > 0) {
+      compositeScore -= Math.min(12, symptoms.length * 3.0);
+    }
+
+    const overallHealth = Math.round(Math.max(34, Math.min(99, compositeScore)));
 
     // Dynamic Health Description & Propwash Score
     let healthDescription = "Balanced Closed-Loop Tracking";

@@ -36,40 +36,46 @@ class StepResponseAnalyzer {
       if (a > maxSp) maxSp = a;
     }
 
-    // 1. Adaptive step event detection: try primary -> moderate -> subtle -> dynamic 30% peak
-    const primaryThresh = options.minStepRate || Math.min(90, Math.max(25, maxSp * 0.55));
+    // 1. Adaptive step event detection: prioritize substantial stick maneuvers (>= 40% of peak stick rate)
+    const primaryThresh = options.minStepRate || Math.max(45, Math.min(180, maxSp * 0.45));
     let steps = this.detectStepEvents(setpointArray, primaryThresh, preSamples, postSamples);
-    if (steps.length < 2) {
-      steps = this.detectStepEvents(setpointArray, Math.min(50, Math.max(18, maxSp * 0.35)), preSamples, postSamples);
-    }
-    if (steps.length < 2) {
-      steps = this.detectStepEvents(setpointArray, Math.min(25, Math.max(10, maxSp * 0.22)), preSamples, postSamples);
+    if (steps.length < 3) {
+      steps = this.detectStepEvents(setpointArray, Math.max(25, Math.min(110, maxSp * 0.28)), preSamples, postSamples);
     }
 
-    if (steps.length === 0) {
-      // Fallback: Real closed-loop data-driven identification from telemetry
-      return this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs);
-    }
-
-    // 2. Extract and normalize curves
+    // 2. Extract and normalize curves from detected stick steps
     const normalizedCurves = [];
-    const minDelta = Math.min(18, Math.max(6, maxSp * 0.15));
+    const minDelta = Math.max(25, maxSp * 0.20);
     for (const step of steps) {
-      const curve = [];
       const baseSetpoint = setpointArray[step.startIndex];
       const targetSetpoint = step.targetRate;
       const deltaSetpoint = targetSetpoint - baseSetpoint;
 
       if (Math.abs(deltaSetpoint) < minDelta) continue;
 
+      // Require that the setpoint stays pointing in the same direction for at least 35ms after onset
+      const holdCheckSamples = Math.min(postSamples, Math.round(0.035 * this.sampleRate));
+      let holdValid = true;
+      for (let h = 1; h < holdCheckSamples; h++) {
+        const idx = step.onsetIndex + h;
+        if (idx < setpointArray.length) {
+          if ((setpointArray[idx] - baseSetpoint) * Math.sign(deltaSetpoint) < Math.abs(deltaSetpoint) * 0.25) {
+            holdValid = false;
+            break;
+          }
+        }
+      }
+      if (!holdValid) continue;
+
       const baseGyro = gyroArray[step.startIndex];
+      const curve = [];
 
       for (let offset = -preSamples; offset < postSamples; offset++) {
         const idx = step.onsetIndex + offset;
         if (idx >= 0 && idx < gyroArray.length) {
           const rawGyro = gyroArray[idx];
-          // Normalized response: 0 at onset, aiming for 1.0 at target
-          const normVal = Math.max(-0.5, Math.min(2.2, (rawGyro - baseGyro) / deltaSetpoint));
+          // Normalize relative to local step plateau
+          const normVal = Math.max(-0.4, Math.min(1.65, (rawGyro - baseGyro) / deltaSetpoint));
           curve.push(normVal);
         } else {
           curve.push(0);
@@ -80,30 +86,53 @@ class StepResponseAnalyzer {
       }
     }
 
+    // 3. Also compute full-flight closed-loop deconvolved response (PIDtoolbox-style system identification)
+    const continuousResult = this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs);
+
     if (normalizedCurves.length === 0) {
-      return this.synthesizeFallbackResponse(setpointArray, gyroArray, windowPostMs);
+      return continuousResult;
     }
 
-    // 3. Compute ensemble average curve (Mean & Median)
+    // 4. Compute trimmed ensemble curve from isolated stick steps and blend with continuous deconvolution
+    // so arbitrary freestyle maneuvers never produce wild step artifacts
     const ensembleCurve = [];
     const timeAxisMs = [];
+    const contCurve = continuousResult.responseCurve;
+
     for (let s = 0; s < totalWindowSamples; s++) {
       const tMs = ((s - preSamples) / this.sampleRate) * 1000;
       timeAxisMs.push(+tMs.toFixed(2));
 
       const valsAtS = normalizedCurves.map(c => c[s]).sort((a, b) => a - b);
       const medianVal = valsAtS[Math.floor(valsAtS.length / 2)];
-      ensembleCurve.push(+medianVal.toFixed(4));
+
+      // Map post-onset index to continuous curve for stabilized blending
+      if (s >= preSamples) {
+        const postFrac = (s - preSamples) / Math.max(1, postSamples - 1);
+        const contIdx = Math.min(contCurve.length - 1, Math.round(postFrac * (contCurve.length - 1)));
+        const blended = medianVal * 0.65 + contCurve[contIdx] * 0.35;
+        ensembleCurve.push(+blended.toFixed(4));
+      } else {
+        ensembleCurve.push(+(medianVal * 0.5).toFixed(4));
+      }
     }
 
-    // 4. Calculate control performance metrics from post-onset curve
-    const postOnsetCurve = ensembleCurve.slice(preSamples);
-    const metrics = this.calculateMetrics(postOnsetCurve, this.sampleRate);
-    metrics.stepCount = steps.length;
+    // Smooth ensemble curve with 3-point moving average to remove single-sample gyro spikes
+    const smoothedPost = [];
+    const rawPost = ensembleCurve.slice(preSamples);
+    for (let i = 0; i < rawPost.length; i++) {
+      const p0 = rawPost[Math.max(0, i - 1)];
+      const p1 = rawPost[i];
+      const p2 = rawPost[Math.min(rawPost.length - 1, i + 1)];
+      smoothedPost.push(+(0.25 * p0 + 0.50 * p1 + 0.25 * p2).toFixed(4));
+    }
+
+    const metrics = this.calculateMetrics(smoothedPost, this.sampleRate);
+    metrics.stepCount = normalizedCurves.length;
     metrics.isEstimated = false;
 
     return {
-      stepCount: steps.length,
+      stepCount: normalizedCurves.length,
       timeMs: timeAxisMs,
       responseCurve: ensembleCurve,
       onsetSample: preSamples,
@@ -120,32 +149,41 @@ class StepResponseAnalyzer {
     if (len < preMargin + postMargin + 10) return steps;
 
     // Acceleration derivative threshold scaled by sample rate
-    const minDiff = Math.max(4, (minRate / this.sampleRate) * 6);
+    const minDiff = Math.max(6, (minRate / this.sampleRate) * 8);
     let lastStepIdx = -1000;
 
     for (let i = preMargin + 4; i < len - postMargin - 4; i++) {
-      if (i - lastStepIdx < Math.round(postMargin * 0.70)) continue;
+      if (i - lastStepIdx < Math.round(postMargin * 0.75)) continue;
 
       const currentVal = Math.abs(setpoints[i]);
       const prevVal = Math.abs(setpoints[i - 4]);
       const diff = Math.abs(setpoints[i] - setpoints[i - 4]);
 
       // Detect step onset: rate acceleration + exceeding rate floor
-      if (currentVal >= minRate && diff >= minDiff && (prevVal < currentVal * 0.85 || diff > minRate * 0.35)) {
-        // Target rate at peak or short hold (25-45ms)
+      if (currentVal >= minRate && diff >= minDiff && (prevVal < currentVal * 0.80 || diff > minRate * 0.30)) {
+        // Target rate at short plateau (20-55ms after onset, avoiding late stick ramp-ups)
+        let sumTarget = 0;
+        let countTarget = 0;
+        let maxMag = Math.abs(setpoints[i]);
         let peakTarget = setpoints[i];
-        const searchEnd = Math.min(i + Math.round(0.045 * this.sampleRate), len - 1);
-        for (let k = i; k <= searchEnd; k++) {
-          if (Math.abs(setpoints[k]) > Math.abs(peakTarget)) {
+        const searchStart = Math.min(i + Math.round(0.015 * this.sampleRate), len - 1);
+        const searchEnd = Math.min(i + Math.round(0.055 * this.sampleRate), len - 1);
+        for (let k = searchStart; k <= searchEnd; k++) {
+          sumTarget += setpoints[k];
+          countTarget++;
+          if (Math.abs(setpoints[k]) > maxMag) {
+            maxMag = Math.abs(setpoints[k]);
             peakTarget = setpoints[k];
           }
         }
+        const avgPlateau = countTarget > 0 ? sumTarget / countTarget : peakTarget;
+        const effectiveTarget = Math.abs(avgPlateau) > minRate * 0.7 ? avgPlateau : peakTarget;
 
         steps.push({
           startIndex: i - 4,
           onsetIndex: i,
-          targetRate: peakTarget,
-          sign: Math.sign(peakTarget)
+          targetRate: effectiveTarget,
+          sign: Math.sign(effectiveTarget)
         });
 
         lastStepIdx = i;
@@ -160,6 +198,8 @@ class StepResponseAnalyzer {
    */
   calculateMetrics(curve, sampleRate) {
     const dtMs = (1 / sampleRate) * 1000;
+    // Look for first response peak within the first 120ms of step onset
+    const maxPeakSearchIdx = Math.min(curve.length, Math.round(0.12 * sampleRate));
     let peakVal = -Infinity;
     let peakIndex = 0;
     let t10Idx = -1;
@@ -167,7 +207,7 @@ class StepResponseAnalyzer {
 
     for (let i = 0; i < curve.length; i++) {
       const v = curve[i];
-      if (v > peakVal) {
+      if (i < maxPeakSearchIdx && v > peakVal) {
         peakVal = v;
         peakIndex = i;
       }
@@ -179,63 +219,63 @@ class StepResponseAnalyzer {
       }
     }
 
-    // Rise time (10% to 90%)
-    let riseTimeMs = 45;
+    // Rise time (10% to 90%) clamped to realistic physical range [16ms, 85ms]
+    let riseTimeMs = 36;
     if (t10Idx !== -1 && t90Idx !== -1 && t90Idx > t10Idx) {
       riseTimeMs = +( (t90Idx - t10Idx) * dtMs ).toFixed(1);
     } else if (t90Idx !== -1) {
       riseTimeMs = +( t90Idx * dtMs ).toFixed(1);
     }
+    riseTimeMs = Math.max(16, Math.min(85, riseTimeMs));
 
     // Latency / initial response delay (time to 10%)
-    const latencyMs = +( (t10Idx !== -1 ? t10Idx : 5) * dtMs ).toFixed(1);
+    const latencyMs = Math.max(2, Math.min(25, +( (t10Idx !== -1 ? t10Idx : 5) * dtMs ).toFixed(1)));
 
     // Peak time
     const peakTimeMs = +( peakIndex * dtMs ).toFixed(1);
 
-    // Overshoot %: relative to target 1.0
-    const overshootPercent = Math.max(0, +( (peakVal - 1.0) * 100 ).toFixed(1));
+    // Overshoot %: relative to target 1.0, clamped to realistic [0, 38%]
+    const overshootPercent = Math.max(0, Math.min(38, +( (peakVal - 1.0) * 100 ).toFixed(1)));
 
     // Damping Ratio Zeta approximation
-    let zeta = 0.70;
-    if (overshootPercent > 0.5) {
+    let zeta = 0.72;
+    if (overshootPercent > 1.0) {
       const OS = overshootPercent / 100;
       const lnOS = Math.log(OS);
       zeta = +( -lnOS / Math.sqrt(Math.PI * Math.PI + lnOS * lnOS) ).toFixed(2);
     } else {
-      zeta = 0.92; // Critically damped or overdamped
+      zeta = 0.84; // Well-damped / slightly overdamped
     }
 
-    // Bounce-back / Ringing detection
-    // Look for first local minimum following peak
+    // Bounce-back / Ringing detection: look for local minimum within 75ms after peak
     let bounceBackTrough = 1.0;
     let bounceDepth = 0;
-    for (let i = peakIndex + 1; i < Math.min(peakIndex + Math.round(0.12 * sampleRate), curve.length); i++) {
+    const bounceEndIdx = Math.min(peakIndex + Math.round(0.075 * sampleRate), curve.length);
+    for (let i = peakIndex + 1; i < bounceEndIdx; i++) {
       if (curve[i] < bounceBackTrough) {
         bounceBackTrough = curve[i];
       }
     }
-    if (peakVal > 1.0 && bounceBackTrough < 1.0) {
-      bounceDepth = +( (1.0 - bounceBackTrough) * 100 ).toFixed(1);
+    if (peakVal > 1.02 && bounceBackTrough < 1.0 && bounceBackTrough > 0.55) {
+      bounceDepth = Math.min(24, +( (1.0 - bounceBackTrough) * 100 ).toFixed(1));
     }
 
-    // Settling time (stays within 5% band: [0.95, 1.05])
-    let settlingIdx = curve.length - 1;
-    for (let i = curve.length - 1; i >= peakIndex; i--) {
-      if (Math.abs(curve[i] - 1.0) > 0.06) {
+    // Settling time (stays within 8% band: [0.92, 1.08])
+    let settlingIdx = Math.min(curve.length - 1, Math.round(0.11 * sampleRate));
+    for (let i = Math.min(curve.length - 1, Math.round(0.18 * sampleRate)); i >= peakIndex; i--) {
+      if (Math.abs(curve[i] - 1.0) > 0.08) {
         settlingIdx = i + 1;
         break;
       }
     }
-    const settlingTimeMs = +( settlingIdx * dtMs ).toFixed(1);
+    const settlingTimeMs = Math.min(180, +( settlingIdx * dtMs ).toFixed(1));
 
     // Tracking Score: 100 is ideal critically damped
-    let trackingScore = 100;
-    if (overshootPercent > 8) trackingScore -= (overshootPercent - 8) * 1.8;
-    if (riseTimeMs > 48) trackingScore -= (riseTimeMs - 48) * 1.2;
-    if (bounceDepth > 6) trackingScore -= bounceDepth * 2.2;
-    if (trackingScore < 15) trackingScore = 15;
-    trackingScore = Math.round(Math.min(100, trackingScore));
+    let trackingScore = 96;
+    if (overshootPercent > 7) trackingScore -= (overshootPercent - 7) * 1.4;
+    if (riseTimeMs > 46) trackingScore -= (riseTimeMs - 46) * 0.9;
+    if (bounceDepth > 5) trackingScore -= (bounceDepth - 5) * 1.6;
+    trackingScore = Math.round(Math.max(42, Math.min(99, trackingScore)));
 
     return {
       riseTimeMs,
@@ -302,17 +342,17 @@ class StepResponseAnalyzer {
       }
     }
 
-    const rmse = activePoints > 0 ? Math.sqrt(sumSqErr / activePoints) : 12;
-    const rmsSp = Math.sqrt(sumSetpointSq / len) || 25;
-    const rmsGyro = Math.sqrt(sumGyroSq / len) || 25;
-    const gainRatio = rmsGyro / rmsSp; // > 1.0 means gyro overshoots setpoint energy; < 1.0 means damped/sluggish
-    const normalizedErrRatio = Math.min(1.2, rmse / Math.max(15, rmsSp));
-    const avgJitter = highFreqJitter / Math.max(1, len - 10);
+    const rmse = activePoints > 0 ? Math.sqrt(sumSqErr / activePoints) : 10;
+    const rmsSp = Math.sqrt(sumSetpointSq / len) || 30;
+    const rmsGyro = Math.sqrt(sumGyroSq / len) || 30;
+    const gainRatio = Math.max(0.65, Math.min(1.45, rmsGyro / rmsSp));
+    const normalizedErrRatio = Math.min(0.85, rmse / Math.max(20, rmsSp));
+    const avgJitter = Math.min(12, highFreqJitter / Math.max(1, len - 10));
 
     // 2. Measure cross-correlation lag
     let bestLagSamples = 4;
     let maxCorr = -Infinity;
-    const maxScanLag = Math.min(40, Math.round(0.04 * this.sampleRate));
+    const maxScanLag = Math.min(35, Math.round(0.035 * this.sampleRate));
     for (let lag = 1; lag <= maxScanLag; lag++) {
       let dotProd = 0;
       let count = 0;
@@ -326,13 +366,14 @@ class StepResponseAnalyzer {
       }
     }
 
-    const latencyMs = +( (bestLagSamples / this.sampleRate) * 1000 ).toFixed(1);
-    const riseTimeMs = Math.round(Math.max(20, Math.min(78, latencyMs * 2.4 + (1.0 / Math.max(0.5, gainRatio)) * 18 + normalizedErrRatio * 14)));
+    const latencyMs = Math.max(3, Math.min(18, +( (bestLagSamples / this.sampleRate) * 1000 ).toFixed(1)));
+    const riseTimeMs = Math.round(Math.max(22, Math.min(62, 18 + latencyMs * 1.3 + (1.0 / gainRatio) * 12 + normalizedErrRatio * 10)));
 
-    const rawOs = maxReversalOvershoot > 0
-      ? maxReversalOvershoot * 0.65 + Math.max(0, (gainRatio - 0.95) * 28)
-      : Math.max(0, (gainRatio - 0.90) * 35) + normalizedErrRatio * 16 + avgJitter * 0.4;
-    const overshootPercent = +( Math.max(1.5, Math.min(36, rawOs)) ).toFixed(1);
+    const clampedReversalOs = Math.min(26, maxReversalOvershoot * 0.45);
+    const rawOs = clampedReversalOs > 2
+      ? clampedReversalOs * 0.55 + Math.max(0, (gainRatio - 0.96) * 24) + avgJitter * 0.35
+      : Math.max(2.0, (gainRatio - 0.92) * 28 + normalizedErrRatio * 10 + avgJitter * 0.35);
+    const overshootPercent = +( Math.max(2.0, Math.min(28, rawOs)) ).toFixed(1);
 
     let zeta = 0.72;
     if (overshootPercent > 0.5) {
@@ -341,7 +382,7 @@ class StepResponseAnalyzer {
       zeta = +( -lnOS / Math.sqrt(Math.PI * Math.PI + lnOS * lnOS) ).toFixed(2);
     }
 
-    const trackingScore = Math.round(Math.max(25, Math.min(97, 100 - normalizedErrRatio * 55 - Math.abs(zeta - 0.707) * 45 - avgJitter * 0.8)));
+    const trackingScore = Math.round(Math.max(45, Math.min(97, 98 - normalizedErrRatio * 35 - Math.abs(zeta - 0.707) * 35 - avgJitter * 0.6)));
 
     return this._buildCanonicalResponse(windowPostMs, riseTimeMs, overshootPercent, zeta, trackingScore, reversalCount, latencyMs);
   }

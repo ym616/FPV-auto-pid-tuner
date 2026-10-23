@@ -194,9 +194,11 @@ class FFTAnalyzer {
     }
 
     const total = lowEnergy + midEnergy + highEnergy + 1e-12;
+    // Propwash ratio relative to total flight energy, clamped to realistic [0.02, 0.55]
+    const rawPropwashRatio = propwashEnergy / (lowEnergy + midEnergy + 1e-6);
     return {
       controlBandPct: +((lowEnergy / total) * 100).toFixed(1),
-      propwashIndex: +(propwashEnergy / (lowEnergy + 1e-6)).toFixed(2),
+      propwashIndex: +Math.min(0.55, rawPropwashRatio * 0.45).toFixed(2),
       midBandPct: +((midEnergy / total) * 100).toFixed(1),
       highBandPct: +((highEnergy / total) * 100).toFixed(1)
     };
@@ -206,7 +208,7 @@ class FFTAnalyzer {
    * Evaluate overall noise severity and motor heat risk
    */
   evaluateNoiseProfile(freqs, psdDb, bands) {
-    let highFreqAvgDb = -60;
+    let highFreqAvgDb = -52;
     let highPoints = 0;
     let sumDb = 0;
 
@@ -223,11 +225,11 @@ class FFTAnalyzer {
     let riskColor = '#00e676'; // green
     let filterSliderAdvice = 'SAFE_TO_RAISE'; // filters can slide right
 
-    if (highFreqAvgDb > -22 || bands.highBandPct > 35) {
+    if (highFreqAvgDb > -18 || bands.highBandPct > 40) {
       riskLevel = 'CRITICAL';
       riskColor = '#ff3366'; // red
       filterSliderAdvice = 'MUST_LOWER'; // move sliders left to save motors
-    } else if (highFreqAvgDb > -30 || bands.highBandPct > 20) {
+    } else if (highFreqAvgDb > -26 || bands.highBandPct > 24) {
       riskLevel = 'ELEVATED';
       riskColor = '#ffb300'; // yellow
       filterSliderAdvice = 'CAUTION';

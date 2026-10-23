@@ -1080,7 +1080,7 @@ class BlackboxParser {
       if (/rccommand\[2\]|rc_yaw|yaw_rc/i.test(lower)) colMap.yawRc = idx;
 
       // Roll Setpoint / RC (prioritize pre-scaled deg/s target)
-      if (/^setpoint\[0\]|^rccommands\[0\]|^axisrate\[0\]/i.test(lower)) {
+      if (/^setpoint\[0\]|^rccommands\[0\]/i.test(lower)) {
         colMap.rollSetpoint = idx;
         colMap.rollSetpointIsDeg = true;
       } else if (!colMap.rollSetpointIsDeg && /rccommand\[0\]|rc_roll|roll_rc|target_roll/i.test(lower)) {
@@ -1088,7 +1088,7 @@ class BlackboxParser {
       }
 
       // Pitch Setpoint / RC
-      if (/^setpoint\[1\]|^rccommands\[1\]|^axisrate\[1\]/i.test(lower)) {
+      if (/^setpoint\[1\]|^rccommands\[1\]/i.test(lower)) {
         colMap.pitchSetpoint = idx;
         colMap.pitchSetpointIsDeg = true;
       } else if (!colMap.pitchSetpointIsDeg && /rccommand\[1\]|rc_pitch|pitch_rc|target_pitch/i.test(lower)) {
@@ -1096,7 +1096,7 @@ class BlackboxParser {
       }
 
       // Yaw Setpoint / RC
-      if (/^setpoint\[2\]|^rccommands\[2\]|^axisrate\[2\]/i.test(lower)) {
+      if (/^setpoint\[2\]|^rccommands\[2\]/i.test(lower)) {
         colMap.yawSetpoint = idx;
         colMap.yawSetpointIsDeg = true;
       } else if (!colMap.yawSetpointIsDeg && /rccommand\[2\]|rc_yaw|yaw_rc|target_yaw/i.test(lower)) {

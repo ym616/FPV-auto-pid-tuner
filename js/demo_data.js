@@ -178,7 +178,7 @@ const DemoFlightData = {
     const headers = [
       'loopIteration',
       'time (us)',
-      'axisRate[0]', 'axisRate[1]', 'axisRate[2]',
+      'setpoint[0]', 'setpoint[1]', 'setpoint[2]',
       'rcCommand[0]', 'rcCommand[1]', 'rcCommand[2]', 'rcCommand[3]',
       'gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]',
       'axisP[0]', 'axisP[1]', 'axisP[2]',
@@ -297,7 +297,7 @@ const DemoFlightData = {
       lines.push([
         i,
         timeUs,
-        gyroRoll, gyroPitch, gyroYaw,
+        rcRoll, rcPitch, rcYaw,
         rcRoll, rcPitch, rcYaw, rcThrottle,
         gyroRoll, gyroPitch, gyroYaw,
         pRoll, pPitch, 0,

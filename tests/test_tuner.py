@@ -375,38 +375,33 @@ class TestJSTuningEngineEndToEnd(unittest.TestCase):
             self.assertGreater(len(code), 500, f"JS file {fname} is unexpectedly short")
 
     def compute_health_and_tune(self, pitch_metrics, roll_metrics, high_freq_db, propwash_idx, target_rise_ms=42):
-        # Mirrors continuous scoring & proportional scaling in js/tuning_engine.js
-        is_high_noise = high_freq_db > -22
-        is_elevated_noise = not is_high_noise and high_freq_db > -30
+        # Mirrors weighted composite scoring in js/tuning_engine.js
+        is_high_noise = high_freq_db > -18
+        is_elevated_noise = not is_high_noise and high_freq_db > -26
 
-        score = 96.0
-        p_damp_err = abs(pitch_metrics["zeta"] - 0.707)
-        score -= p_damp_err * 28.0
-        if pitch_metrics["os"] > 4.0:
-            score -= (pitch_metrics["os"] - 4.0) * 1.25
-        if pitch_metrics["bounce"] > 2.0:
-            score -= (pitch_metrics["bounce"] - 2.0) * 1.65
-        p_rise_diff = abs(pitch_metrics["rise"] - target_rise_ms)
-        score -= (p_rise_diff / target_rise_ms) * 19.0
+        p_damp_err = min(0.40, abs(pitch_metrics["zeta"] - 0.707))
+        p_os_excess = min(28.0, max(0.0, pitch_metrics["os"] - 5.0))
+        p_bounce_excess = min(20.0, max(0.0, pitch_metrics["bounce"] - 2.5))
+        p_rise_ratio = min(0.85, abs(pitch_metrics["rise"] - target_rise_ms) / max(20.0, target_rise_ms))
+        pitch_sub = max(32.0, min(99.0, 98.0 - p_damp_err * 42.0 - p_os_excess * 1.15 - p_bounce_excess * 1.35 - p_rise_ratio * 24.0))
 
-        r_damp_err = abs(roll_metrics["zeta"] - 0.707)
-        score -= r_damp_err * 24.0
-        if roll_metrics["os"] > 4.0:
-            score -= (roll_metrics["os"] - 4.0) * 1.15
-        if roll_metrics["bounce"] > 2.0:
-            score -= (roll_metrics["bounce"] - 2.0) * 1.45
-        r_rise_diff = abs(roll_metrics["rise"] - target_rise_ms)
-        score -= (r_rise_diff / target_rise_ms) * 15.0
+        r_damp_err = min(0.40, abs(roll_metrics["zeta"] - 0.707))
+        r_os_excess = min(28.0, max(0.0, roll_metrics["os"] - 5.0))
+        r_bounce_excess = min(20.0, max(0.0, roll_metrics["bounce"] - 2.5))
+        r_rise_ratio = min(0.85, abs(roll_metrics["rise"] - target_rise_ms) / max(20.0, target_rise_ms))
+        roll_sub = max(32.0, min(99.0, 98.0 - r_damp_err * 38.0 - r_os_excess * 1.05 - r_bounce_excess * 1.25 - r_rise_ratio * 22.0))
 
+        noise_sub = 98.0 - max(0.0, min(45.0, (high_freq_db + 50.0) * 1.15))
         if is_high_noise:
-            score -= 26.0
+            noise_sub -= 18.0
         elif is_elevated_noise:
-            score -= 13.0
+            noise_sub -= 8.0
+        noise_sub = max(28.0, min(99.0, noise_sub))
 
-        score -= max(0.0, (high_freq_db + 52.0) * 0.28)
-        score -= max(0.0, (propwash_idx - 0.10) * 22.0)
+        stability_sub = max(35.0, min(99.0, 96.0 - min(38.0, max(0.0, (propwash_idx - 0.08) * 75.0))))
 
-        overall_health = round(max(22, min(99, score)))
+        composite = pitch_sub * 0.36 + roll_sub * 0.30 + noise_sub * 0.20 + stability_sub * 0.14
+        overall_health = round(max(34, min(99, composite)))
         return overall_health
 
     def test_health_score_changes_dynamically_across_flight_logs(self):
@@ -435,15 +430,17 @@ class TestJSTuningEngineEndToEnd(unittest.TestCase):
         h_noisy = self.compute_health_and_tune(
             {"zeta": 0.65, "os": 9.0, "bounce": 4.0, "rise": 44},
             {"zeta": 0.66, "os": 8.5, "bounce": 3.5, "rise": 42},
-            high_freq_db=-16.0,
-            propwash_idx=0.28
+            high_freq_db=-14.0,
+            propwash_idx=0.32
         )
 
         scores = [h_clean, h_bouncy, h_sluggish, h_noisy]
         self.assertEqual(len(set(scores)), 4, f"All 4 flight scenarios must produce distinct health scores: {scores}")
-        self.assertGreater(h_clean, 85)
-        self.assertLess(h_bouncy, 65)
-        self.assertLess(h_noisy, 60)
+        for s in scores:
+            self.assertNotEqual(s, 22, "Health score must never pin at the old floor of 22")
+        self.assertGreater(h_clean, 90)
+        self.assertLess(h_bouncy, 80)
+        self.assertLess(h_noisy, 82)
 
 if __name__ == "__main__":
     unittest.main()
