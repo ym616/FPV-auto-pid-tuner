@@ -431,16 +431,43 @@ class TuningEngine {
     this.addDiff(diffList, "D-Term Filter Slider", current.dtermFilterSlider, recDtermSlider, "x", "D-term noise filtering / motor heat");
     this.addDiff(diffList, "Dynamic Idle (RPM)", current.dynamicIdle, recDynamicIdle, "00 RPM", "Prevents motor stalling in propwash");
 
-    // Overall Tune Health Score
-    let overallHealth = 88;
-    if (isHighNoise) overallHealth -= 30;
-    else if (isElevatedNoise) overallHealth -= 12;
-    if (pitchMetrics && pitchMetrics.overshootPercent > 18) overallHealth -= 15;
-    if (rollMetrics && rollMetrics.overshootPercent > 16) overallHealth -= 12;
-    if (symptoms.length > 0) overallHealth -= symptoms.length * 5;
-    overallHealth = Math.max(30, Math.min(98, overallHealth));
+    // Continuous, data-driven Flight Tune Health Score (0 to 100)
+    let score = 96.0;
+    if (pitchMetrics) {
+      const pDampErr = Math.abs(pitchMetrics.zeta - 0.707);
+      score -= pDampErr * 24.0;
+      if (pitchMetrics.overshootPercent > 5.0) {
+        score -= (pitchMetrics.overshootPercent - 5.0) * 1.1;
+      }
+      if (pitchMetrics.bounceDepthPercent > 3.0) {
+        score -= (pitchMetrics.bounceDepthPercent - 3.0) * 1.5;
+      }
+      if (pitchMetrics.riseTimeMs > baseline.targetRiseTimeMs) {
+        score -= ((pitchMetrics.riseTimeMs - baseline.targetRiseTimeMs) / baseline.targetRiseTimeMs) * 18.0;
+      }
+    }
+    if (rollMetrics) {
+      const rDampErr = Math.abs(rollMetrics.zeta - 0.707);
+      score -= rDampErr * 20.0;
+      if (rollMetrics.overshootPercent > 5.0) {
+        score -= (rollMetrics.overshootPercent - 5.0) * 1.0;
+      }
+      if (rollMetrics.bounceDepthPercent > 3.0) {
+        score -= (rollMetrics.bounceDepthPercent - 3.0) * 1.3;
+      }
+    }
+    if (isHighNoise) score -= 28.0;
+    else if (isElevatedNoise) score -= 14.0;
+    else if (noise.pitch && noise.pitch.metrics && noise.pitch.metrics.peakPowerDb) {
+      const pDb = noise.pitch.metrics.peakPowerDb;
+      if (pDb > -20) score -= (pDb + 20) * 0.4;
+    }
+    if (symptoms.length > 0) score -= symptoms.length * 4.0;
 
-    // Generate Betaflight CLI Script
+    const overallHealth = Math.round(Math.max(25, Math.min(99, score)));
+
+    // Generate Betaflight CLI Script with Log Provenance
+    const logInfo = input.logInfo || {};
     const cliScript = this.generateCliScript({
       quadName: baseline.name,
       recPids,
@@ -450,7 +477,12 @@ class TuningEngine {
       recTpaBreakpoint,
       recGyroSlider,
       recDtermSlider,
-      recDynamicIdle
+      recDynamicIdle,
+      logName: logInfo.fileName || 'Flight Log',
+      sampleRate: logInfo.sampleRate,
+      duration: logInfo.duration,
+      totalSamples: logInfo.totalSamples,
+      stepCount: (step.pitch && step.pitch.stepCount) || (step.roll && step.roll.stepCount) || null
     });
 
     return {
@@ -491,11 +523,14 @@ class TuningEngine {
   }
 
   generateCliScript(rec) {
+    const maneuversText = rec.stepCount ? `${rec.stepCount} step flicks analyzed` : 'Continuous flight tracking deconvolution';
     const lines = [
       `# ======================================================`,
-      `# AeroPID Pro - Recommended Betaflight Tune`,
-      `# Profile: ${rec.quadName}`,
-      `# Generated automatically by Blackbox & Gyro Analysis`,
+      `# AeroPID Pro - Betaflight Custom Tune`,
+      `# Source Log: ${rec.logName}`,
+      `# Flight Telemetry: ${rec.duration ? rec.duration + 's duration' : 'N/A'} @ ${rec.sampleRate ? rec.sampleRate + ' Hz' : '1000 Hz'}${rec.totalSamples ? ' (' + rec.totalSamples.toLocaleString() + ' frames)' : ''}`,
+      `# Analysis Basis: ${maneuversText}`,
+      `# Base Profile: ${rec.quadName}`,
       `# ======================================================`,
       ``,
       `# --- Master Multiplier ---`,
@@ -582,6 +617,90 @@ class TuningEngine {
     }
 
     return config;
+  }
+
+  /**
+   * Automatically extract PID and battery configuration from Blackbox metadata headers
+   * @param {Object} metadata
+   * @returns {Object|null}
+   */
+  extractConfigFromLog(metadata = {}) {
+    if (!metadata || typeof metadata !== 'object') return null;
+
+    let hasAnyPid = false;
+    const extracted = {
+      pids: {
+        roll: { p: 45, i: 80, d: 35, f: 120, dMax: 40 },
+        pitch: { p: 48, i: 85, d: 38, f: 130, dMax: 44 },
+        yaw: { p: 45, i: 85, d: 0, f: 100, dMax: 0 }
+      },
+      masterMultiplier: 1.0,
+      antiGravity: 3500,
+      tpaRate: 0.65,
+      tpaBreakpoint: 1350,
+      gyroFilterSlider: 1.0,
+      dtermFilterSlider: 1.0,
+      dynamicIdle: 40,
+      detectedCells: null
+    };
+
+    // 1. Check vbatref / battery
+    if (metadata.vbatref) {
+      const vref = parseInt(metadata.vbatref, 10);
+      if (vref > 2100) extracted.detectedCells = 6;
+      else if (vref > 1400) extracted.detectedCells = 4;
+      else if (vref > 950) extracted.detectedCells = 3;
+      else if (vref > 550) extracted.detectedCells = 2;
+      else if (vref > 200) extracted.detectedCells = 1;
+    }
+
+    // 2. Direct set values or grouped rollPID / pitchPID / yawPID
+    if (metadata.rollpid) {
+      const parts = metadata.rollpid.split(',').map(s => parseInt(s, 10));
+      if (parts.length >= 3 && !isNaN(parts[0])) {
+        extracted.pids.roll.p = parts[0];
+        extracted.pids.roll.i = parts[1];
+        extracted.pids.roll.d = parts[2];
+        if (parts[3] !== undefined && !isNaN(parts[3])) extracted.pids.roll.f = parts[3];
+        hasAnyPid = true;
+      }
+    }
+    if (metadata.pitchpid) {
+      const parts = metadata.pitchpid.split(',').map(s => parseInt(s, 10));
+      if (parts.length >= 3 && !isNaN(parts[0])) {
+        extracted.pids.pitch.p = parts[0];
+        extracted.pids.pitch.i = parts[1];
+        extracted.pids.pitch.d = parts[2];
+        if (parts[3] !== undefined && !isNaN(parts[3])) extracted.pids.pitch.f = parts[3];
+        hasAnyPid = true;
+      }
+    }
+    if (metadata.yawpid) {
+      const parts = metadata.yawpid.split(',').map(s => parseInt(s, 10));
+      if (parts.length >= 3 && !isNaN(parts[0])) {
+        extracted.pids.yaw.p = parts[0];
+        extracted.pids.yaw.i = parts[1];
+        extracted.pids.yaw.d = parts[2];
+        if (parts[3] !== undefined && !isNaN(parts[3])) extracted.pids.yaw.f = parts[3];
+        hasAnyPid = true;
+      }
+    }
+
+    const checkNum = (k) => metadata[k] !== undefined ? parseFloat(metadata[k]) : null;
+    if (checkNum('p_pitch')) { extracted.pids.pitch.p = Math.round(checkNum('p_pitch')); hasAnyPid = true; }
+    if (checkNum('i_pitch')) { extracted.pids.pitch.i = Math.round(checkNum('i_pitch')); hasAnyPid = true; }
+    if (checkNum('d_pitch')) { extracted.pids.pitch.d = Math.round(checkNum('d_pitch')); hasAnyPid = true; }
+    if (checkNum('f_pitch')) { extracted.pids.pitch.f = Math.round(checkNum('f_pitch')); hasAnyPid = true; }
+
+    if (checkNum('p_roll')) { extracted.pids.roll.p = Math.round(checkNum('p_roll')); hasAnyPid = true; }
+    if (checkNum('i_roll')) { extracted.pids.roll.i = Math.round(checkNum('i_roll')); hasAnyPid = true; }
+    if (checkNum('d_roll')) { extracted.pids.roll.d = Math.round(checkNum('d_roll')); hasAnyPid = true; }
+    if (checkNum('f_roll')) { extracted.pids.roll.f = Math.round(checkNum('f_roll')); hasAnyPid = true; }
+
+    if (checkNum('master_multiplier')) extracted.masterMultiplier = checkNum('master_multiplier');
+    if (checkNum('anti_gravity_gain')) extracted.antiGravity = Math.round(checkNum('anti_gravity_gain'));
+
+    return hasAnyPid ? extracted : null;
   }
 }
 

@@ -11,6 +11,7 @@ class AeroPIDApp {
     this.fftAnalyzer = new FFTAnalyzer();
     this.tuningEngine = new TuningEngine();
     this.simulator = new DronePIDSimulator();
+    this.droneViewer = new DroneOrientationViewer();
 
     this.currentData = null;
     this.stepResults = null;
@@ -20,19 +21,21 @@ class AeroPIDApp {
     this.charts = {};
     this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets['5in_freestyle_6s']));
     this.droneSpecs = { propSize: 3.0, weight: 165, cellCount: 4, motorKv: 3800, flyingStyle: 'freestyle' };
-    this.activeScenario = 'bouncy_5in';
+    this.activeFileName = '5in_freestyle_reference_flight.csv';
+    this.isUserUploaded = false;
 
     this.init();
   }
 
   init() {
     this.setupCharts();
+    this.droneViewer.init();
     this.setupEventListeners();
     this.setupTabs();
     this.setupSimulator();
 
-    // Load initial scenario (5" Freestyle Bounce-Back)
-    this.loadScenario('bouncy_5in');
+    // Load initial preloaded demo flight
+    this.loadDefaultDemoFlight();
   }
 
   setupCharts() {
@@ -61,11 +64,18 @@ class AeroPIDApp {
         const targetPane = document.getElementById(targetId);
         if (targetPane) {
           targetPane.classList.add('active');
-          // Trigger chart re-render on active tab resize
-          setTimeout(() => {
-            Object.values(this.charts).forEach(c => c && c.resize && c.resize());
-            this.renderAllCharts();
-          }, 50);
+          if (targetId === 'tabDroneViewer') {
+            setTimeout(() => {
+              this.droneViewer.resizeCanvases();
+              this.droneViewer.render();
+            }, 40);
+          } else {
+            // Trigger chart re-render on active tab resize
+            setTimeout(() => {
+              Object.values(this.charts).forEach(c => c && c.resize && c.resize());
+              this.renderAllCharts();
+            }, 50);
+          }
         }
       });
     });
@@ -96,16 +106,20 @@ class AeroPIDApp {
       }
     });
 
-    // Scenario buttons
-    const scBtns = document.querySelectorAll('.scenario-btn');
-    scBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        scBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const scId = btn.getAttribute('data-scenario');
-        this.loadScenario(scId);
+    // Load Preloaded Demo Flight Button
+    const btnLoadDemo = document.getElementById('btnLoadDemoFlight');
+    if (btnLoadDemo) {
+      btnLoadDemo.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.loadDefaultDemoFlight();
       });
-    });
+    }
+
+    // Switch File Button
+    const btnSwitchFile = document.getElementById('btnSwitchFile');
+    if (btnSwitchFile) {
+      btnSwitchFile.addEventListener('click', () => fileInput.click());
+    }
 
     // Timeline axis selector
     const timelineSelect = document.getElementById('timelineAxisSelect');
@@ -299,13 +313,33 @@ class AeroPIDApp {
     reader.onload = (e) => {
       try {
         const buffer = e.target.result;
+        this.isUserUploaded = true;
+        this.activeFileName = file.name;
+
         this.parser.parse(buffer, null, file.name);
         this.currentData = this.parser.getDataSummary();
+
+        // Automatically extract PID and battery configuration from Blackbox metadata
+        const autoConfig = this.tuningEngine.extractConfigFromLog(this.currentData.metadata);
+        if (autoConfig) {
+          this.currentConfig = autoConfig;
+          if (autoConfig.detectedCells) {
+            this.droneSpecs.cellCount = autoConfig.detectedCells;
+            const sel = document.getElementById('selectCellCount');
+            if (sel) sel.value = String(autoConfig.detectedCells);
+          }
+        }
+
+        // Feed data to interactive 3D drone & stick viewer
+        this.droneViewer.loadData(this.currentData);
+
         this.updateHeaderStats(file.name);
+        this.updateActiveLogUI();
         this.analyzeAndRecommend();
+
         const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox Binary (.bbl)' : 'CSV';
         const sessionInfo = this.currentData.totalSessions > 1 ? ` [Flight ${this.currentData.sessionIndex} of ${this.currentData.totalSessions}]` : '';
-        this.showToast(`Loaded ${typeLabel}${sessionInfo} successfully!`);
+        this.showToast(`Analyzed ${typeLabel}${sessionInfo} successfully!`);
       } catch (err) {
         console.error(err);
         this.setStatus('Parse error', 'danger');
@@ -316,40 +350,77 @@ class AeroPIDApp {
     reader.readAsArrayBuffer(file);
   }
 
-  loadScenario(scId) {
-    const sc = DemoFlightData.scenarios[scId];
-    if (!sc) return;
+  loadDefaultDemoFlight() {
+    this.isUserUploaded = false;
+    this.activeFileName = '5in_freestyle_reference_flight.csv';
+    this.setStatus('Loading reference flight...', 'warning');
 
-    this.activeScenario = scId;
-    this.setStatus('Generating simulation log...', 'warning');
+    // Update specs inputs for 5" Freestyle Demo
+    this.updateSpecsInputs({ propSize: 5.0, weight: 680, cellCount: 6, motorKv: 1950, flyingStyle: 'freestyle' });
+    this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets['5in_freestyle_6s']));
 
-    // Update specs inputs based on scenario
-    if (scId === 'hot_motors_3in5') {
-      this.updateSpecsInputs({ propSize: 3.5, weight: 245, cellCount: 4, motorKv: 3100, flyingStyle: 'freestyle' });
-    } else if (scId === 'sluggish_7in') {
-      this.updateSpecsInputs({ propSize: 7.0, weight: 1200, cellCount: 6, motorKv: 1300, flyingStyle: 'cinematic' });
-    } else {
-      this.updateSpecsInputs({ propSize: 5.0, weight: 680, cellCount: 6, motorKv: 1950, flyingStyle: 'freestyle' });
-    }
-
-    // Update config & symptoms to match scenario
-    this.currentConfig = JSON.parse(JSON.stringify(sc.config));
     const quadSelect = document.getElementById('quadTypeSelect');
-    if (quadSelect) quadSelect.value = sc.quadType;
+    if (quadSelect) quadSelect.value = '5in_freestyle_6s';
 
-    const checkboxes = document.querySelectorAll('input[name="symptom"]');
-    checkboxes.forEach(cb => {
-      cb.checked = sc.symptoms.includes(cb.value);
-    });
-
-    // Generate CSV string
     setTimeout(() => {
-      const csv = DemoFlightData.generateCSV(scId, 12, 1000);
+      const csv = DemoFlightData.generateCSV('bouncy_5in', 14, 1000);
       this.parser.parse(csv);
       this.currentData = this.parser.getDataSummary();
-      this.updateHeaderStats(sc.name);
+
+      // Feed to 3D Drone & Stick Viewer
+      this.droneViewer.loadData(this.currentData);
+
+      this.updateHeaderStats('5" Freestyle Benchmark (Underdamped)');
+      this.updateActiveLogUI();
       this.analyzeAndRecommend();
     }, 10);
+  }
+
+  updateActiveLogUI() {
+    if (!this.currentData) return;
+    const d = this.currentData;
+
+    // Filename
+    const nameEl = document.getElementById('activeLogFileName');
+    if (nameEl) nameEl.innerText = this.activeFileName;
+
+    // Badge
+    const badge = document.getElementById('activeLogBadge');
+    const badgeText = document.getElementById('activeLogBadgeText');
+    const confCard = document.getElementById('activeLogConfirmation');
+    const confText = document.getElementById('activeLogConfirmationText');
+
+    if (this.isUserUploaded) {
+      if (badge) badge.className = 'active-status-badge';
+      if (badgeText) badgeText.innerText = 'Custom User Log Active';
+      if (confCard) confCard.className = 'active-file-confirmation';
+      if (confText) confText.innerText = `Betaflight CLI commands and PID recommendations below are dynamically generated for ${this.activeFileName}.`;
+    } else {
+      if (badge) badge.className = 'active-status-badge demo-mode';
+      if (badgeText) badgeText.innerText = 'Preloaded Demo Flight';
+      if (confCard) confCard.className = 'active-file-confirmation demo-mode';
+      if (confText) confText.innerText = 'Currently previewing reference flight log. Drop your own .BBL or .CSV file into the upload area above to generate your custom drone tune.';
+    }
+
+    // Telemetry Stat Pills
+    const setPill = (id, txt) => {
+      const el = document.getElementById(id);
+      if (el) el.innerText = txt;
+    };
+
+    setPill('pillFormat', d.fileType === 'BBL_BINARY' ? 'BBL Binary' : 'CSV Export');
+    setPill('pillDuration', `${d.duration}s`);
+    setPill('pillLoopRate', `${d.sampleRate} Hz`);
+    setPill('pillFrames', d.totalSamples.toLocaleString());
+    setPill('pillGyroScale', `${(this.parser.gyroScale || 0.061).toFixed(3)}x`);
+
+    // Visual Flash Animation
+    const card = document.getElementById('activeLogCard');
+    if (card) {
+      card.classList.remove('flash-update');
+      void card.offsetWidth; // reflow trigger
+      card.classList.add('flash-update');
+    }
   }
 
   updateHeaderStats(logName) {
@@ -377,10 +448,10 @@ class AeroPIDApp {
     this.stepAnalyzer.setSampleRate(d.sampleRate);
     this.fftAnalyzer.setSampleRate(d.sampleRate);
 
-    // 1. Step Response Analysis
-    const rollStep = this.stepAnalyzer.analyzeAxis(d.roll.setpoint, d.roll.gyro, d.time, { minStepRate: 100 });
-    const pitchStep = this.stepAnalyzer.analyzeAxis(d.pitch.setpoint, d.pitch.gyro, d.time, { minStepRate: 100 });
-    const yawStep = this.stepAnalyzer.analyzeAxis(d.yaw.setpoint, d.yaw.gyro, d.time, { minStepRate: 80 });
+    // 1. Adaptive Step Response Analysis
+    const rollStep = this.stepAnalyzer.analyzeAxis(d.roll.setpoint, d.roll.gyro, d.time, { minStepRate: 80 });
+    const pitchStep = this.stepAnalyzer.analyzeAxis(d.pitch.setpoint, d.pitch.gyro, d.time, { minStepRate: 80 });
+    const yawStep = this.stepAnalyzer.analyzeAxis(d.yaw.setpoint, d.yaw.gyro, d.time, { minStepRate: 60 });
 
     this.stepResults = { roll: rollStep, pitch: pitchStep, yaw: yawStep };
 
@@ -398,7 +469,7 @@ class AeroPIDApp {
 
     const quadType = document.getElementById('quadTypeSelect').value;
 
-    // 4. Run Tuning Engine with dynamic drone hardware specs
+    // 4. Run Tuning Engine with dynamic drone hardware specs and log metadata
     this.readDroneSpecs();
     this.recommendation = this.tuningEngine.generateRecommendation({
       stepMetrics: this.stepResults,
@@ -406,8 +477,23 @@ class AeroPIDApp {
       currentConfig: this.currentConfig,
       quadType: quadType,
       droneSpecs: this.droneSpecs,
-      pilotSymptoms: symptoms
+      pilotSymptoms: symptoms,
+      logInfo: {
+        fileName: this.activeFileName,
+        isUserUploaded: this.isUserUploaded,
+        duration: d.duration,
+        sampleRate: d.sampleRate,
+        totalSamples: d.totalSamples
+      }
     });
+
+    // Update pill maneuvers
+    const stepCount = (this.stepResults.pitch && this.stepResults.pitch.stepCount) ||
+                      (this.stepResults.roll && this.stepResults.roll.stepCount) || 0;
+    const pillManeuvers = document.getElementById('pillManeuvers');
+    if (pillManeuvers) {
+      pillManeuvers.innerText = stepCount > 0 ? `${stepCount} step flicks` : 'Continuous Id';
+    }
 
     // 5. Update UI
     this.updateDiagnosticsUI();

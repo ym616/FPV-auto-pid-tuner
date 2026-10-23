@@ -74,44 +74,79 @@
   <!-- Main Container -->
   <main class="app-container">
 
-    <!-- Upload & Benchmark Scenario Selector -->
-    <section class="top-action-card">
+    <!-- Upload & Active Flight Log Ingestion Card -->
+    <section class="upload-dashboard-card">
+      <!-- Drag & Drop Upload Zone -->
       <div class="drop-zone" id="dropZone">
         <input type="file" id="fileInput" accept=".bbl,.bfl,.csv,.txt" style="display: none;">
         <div class="drop-zone-icon">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
             <line x1="12" y1="3" x2="12" y2="15"></line>
           </svg>
         </div>
-        <div class="drop-zone-title">Upload Betaflight Log (.BBL or CSV)</div>
-        <div class="drop-zone-subtitle">Drop raw Blackbox .bbl / .bfl or exported CSV, or click to browse</div>
+        <div class="drop-zone-title">Upload Your Drone Blackbox Log (.BBL or CSV)</div>
+        <div class="drop-zone-subtitle">Drop raw Blackbox .bbl / .bfl or exported CSV straight from your flight controller, or click to browse</div>
+        <div class="drop-format-chips">
+          <span class="format-pill">Betaflight .BBL</span>
+          <span class="format-pill">Betaflight .BFL</span>
+          <span class="format-pill">Blackbox CSV</span>
+          <span class="format-pill">Telemetry .TXT</span>
+        </div>
+        <div class="demo-reset-wrap">
+          <button type="button" class="btn-demo-link" id="btnLoadDemoFlight">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+            Need to test first? Load 5" Freestyle Reference Demo Flight
+          </button>
+        </div>
       </div>
 
-      <div class="scenario-picker">
-        <div class="scenario-header">Or select a flight scenario:</div>
-        <div class="scenario-buttons">
-          <button class="scenario-btn active" data-scenario="bouncy_5in">
-            <span class="scenario-btn-title">5" Freestyle (Pitch Bounce-Back)</span>
-            <span class="scenario-btn-desc">High P, low D damping</span>
-          </button>
-          <button class="scenario-btn" data-scenario="propwash_5in">
-            <span class="scenario-btn-title">5" Freestyle (Propwash Heavy)</span>
-            <span class="scenario-btn-desc">Low throttle descent turbulence</span>
-          </button>
-          <button class="scenario-btn" data-scenario="hot_motors_3in5">
-            <span class="scenario-btn-title">3.5" Freestyle (Hot Motors)</span>
-            <span class="scenario-btn-desc">Excessive D, 235Hz resonance</span>
-          </button>
-          <button class="scenario-btn" data-scenario="sluggish_7in">
-            <span class="scenario-btn-title">7" Long Range (Sluggish)</span>
-            <span class="scenario-btn-desc">Slow rise time, overdamped</span>
-          </button>
-          <button class="scenario-btn" data-scenario="golden_tune_5in">
-            <span class="scenario-btn-title">Baseline Reference (Tuned)</span>
-            <span class="scenario-btn-desc">Critically damped tracking</span>
-          </button>
+      <!-- Active Flight Log Confirmation Card -->
+      <div class="active-log-card" id="activeLogCard">
+        <div class="active-log-header">
+          <div class="active-status-badge" id="activeLogBadge">
+            <span class="pulse-indicator"></span>
+            <span id="activeLogBadgeText">User Log Active</span>
+          </div>
+          <button class="btn btn-outline btn-xs" id="btnSwitchFile">Switch Log</button>
+        </div>
+
+        <div class="active-file-title-wrap">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <div class="active-file-name" id="activeLogFileName">test_flight.bbl</div>
+        </div>
+
+        <div class="active-file-confirmation" id="activeLogConfirmation">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#137333" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+          <span id="activeLogConfirmationText">Betaflight CLI commands and PID recommendations below are dynamically generated for this flight log.</span>
+        </div>
+
+        <div class="active-telemetry-grid">
+          <div class="active-stat-item">
+            <span class="active-stat-label">File Type</span>
+            <span class="active-stat-val" id="pillFormat">BBL Binary</span>
+          </div>
+          <div class="active-stat-item">
+            <span class="active-stat-label">Duration</span>
+            <span class="active-stat-val" id="pillDuration">00:00s</span>
+          </div>
+          <div class="active-stat-item">
+            <span class="active-stat-label">Loop Rate</span>
+            <span class="active-stat-val" id="pillLoopRate">1000 Hz</span>
+          </div>
+          <div class="active-stat-item">
+            <span class="active-stat-label">Data Frames</span>
+            <span class="active-stat-val" id="pillFrames">0</span>
+          </div>
+          <div class="active-stat-item">
+            <span class="active-stat-label">Gyro Scale</span>
+            <span class="active-stat-val" id="pillGyroScale">0.061x</span>
+          </div>
+          <div class="active-stat-item">
+            <span class="active-stat-label">Maneuvers</span>
+            <span class="active-stat-val" id="pillManeuvers">14 step flicks</span>
+          </div>
         </div>
       </div>
     </section>
@@ -229,6 +264,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
         Tuning & Diagnostics
       </button>
+      <button class="tab-btn" data-tab="tabDroneViewer">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+        3D Drone & Stick Viewer
+      </button>
       <button class="tab-btn" data-tab="tabStepResponse">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         Step Response Analysis
@@ -340,9 +379,107 @@
           </div>
         </div>
       </div>
+    <!-- TAB: 3D Drone & Stick Viewer -->
+    <div class="tab-content" id="tabDroneViewer">
+      <div class="viewer-layout">
+        <!-- Top Telemetry Status Bar -->
+        <div class="viewer-top-bar">
+          <div class="viewer-time-block">
+            <span class="viewer-time-label">Flight Playhead</span>
+            <div class="viewer-time-val"><span id="viewerTimeCurrent">00:00.00</span> <span class="viewer-time-divider">/</span> <span id="viewerTimeTotal">00:00.00</span></div>
+          </div>
+
+          <div class="viewer-stat-chips">
+            <div class="viewer-chip">
+              <span class="chip-label">Pitch Attitude</span>
+              <span class="chip-val" id="viewerPitchAngle">0.0°</span>
+              <span class="chip-sub" id="viewerPitchRate">0°/s</span>
+            </div>
+            <div class="viewer-chip">
+              <span class="chip-label">Roll Attitude</span>
+              <span class="chip-val" id="viewerRollAngle">0.0°</span>
+              <span class="chip-sub" id="viewerRollRate">0°/s</span>
+            </div>
+            <div class="viewer-chip">
+              <span class="chip-label">Yaw Heading</span>
+              <span class="chip-val" id="viewerYawAngle">0°</span>
+              <span class="chip-sub" id="viewerYawRate">0°/s</span>
+            </div>
+            <div class="viewer-chip">
+              <span class="chip-label">Throttle</span>
+              <span class="chip-val" id="viewerThrottlePct">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Two-Column Viewport: 3D Drone & Transmitter Gimbals -->
+        <div class="viewer-viewport-grid">
+          <!-- 3D Drone Canvas Card -->
+          <div class="card viewer-3d-card">
+            <div class="viewer-card-header">
+              <div class="viewer-card-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                3D Drone Attitude & Orientation
+              </div>
+              <button class="btn btn-outline btn-xs" id="btnResetCamera">Reset Camera</button>
+            </div>
+            <div class="canvas-3d-wrapper">
+              <canvas id="canvasDrone3D" width="600" height="380"></canvas>
+            </div>
+          </div>
+
+          <!-- Radio Transmitter Gimbals Card -->
+          <div class="card viewer-gimbals-card">
+            <div class="viewer-card-header">
+              <div class="viewer-card-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+                Radio Transmitter Sticks (Mode 2)
+              </div>
+              <span style="font-size: 0.72rem; color: var(--text-muted);">Real-Time Stick Commands</span>
+            </div>
+            <div class="canvas-gimbals-wrapper">
+              <canvas id="canvasGimbals" width="380" height="380"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline Playback & Scrubber Card -->
+        <div class="card viewer-scrubber-card">
+          <div class="scrubber-controls-row">
+            <div class="playback-btn-group">
+              <button class="btn btn-primary btn-sm" id="btnViewerPlay">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Play
+              </button>
+              <button class="btn btn-outline btn-sm" id="btnPrevFlick" title="Jump to previous step flick">⏮ Prev Flick</button>
+              <button class="btn btn-outline btn-sm" id="btnNextFlick" title="Jump to next step flick">Next Flick ⏭</button>
+            </div>
+
+            <div class="speed-selector">
+              <span class="speed-label">Playback Speed:</span>
+              <button type="button" class="speed-chip" data-speed="0.25">0.25x (Slow-Mo)</button>
+              <button type="button" class="speed-chip" data-speed="0.5">0.5x</button>
+              <button type="button" class="speed-chip active" data-speed="1.0">1.0x</button>
+              <button type="button" class="speed-chip" data-speed="2.0">2.0x</button>
+            </div>
+          </div>
+
+          <!-- Waveform Overview & Range Slider -->
+          <div class="waveform-scrubber-wrap">
+            <canvas id="canvasScrubberWaveform" height="42"></canvas>
+            <input type="range" id="viewerTimeSlider" min="0" max="1000" value="0" class="time-range-slider">
+          </div>
+          <div class="scrubber-legend">
+            <span><span class="legend-color-dot" style="background: rgba(11, 87, 208, 0.5);"></span> Gyro Activity Envelope</span>
+            <span><span class="legend-color-dot" style="background: rgba(176, 96, 0, 0.7);"></span> Throttle Curve</span>
+            <span><span class="legend-color-dot" style="background: #00796b;"></span> Detected Step Maneuvers</span>
+            <span style="margin-left: auto;">Press <kbd>Space</kbd> to Play/Pause • Click waveform to scrub</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- TAB 2: Step Response Analysis -->
+    <!-- TAB 3: Step Response Analysis -->
     <div class="tab-content" id="tabStepResponse">
       <div class="charts-grid-3">
         <!-- Roll Step Chart -->
@@ -645,13 +782,14 @@ set master_multiplier = 1.05..."></textarea>
   </footer>
 
   <!-- Scripts with Cache-Buster -->
-  <script src="js/parser.js?v=2.7"></script>
-  <script src="js/step_response.js?v=2.7"></script>
-  <script src="js/fft_analyzer.js?v=2.7"></script>
-  <script src="js/tuning_engine.js?v=2.7"></script>
-  <script src="js/simulator.js?v=2.7"></script>
-  <script src="js/demo_data.js?v=2.7"></script>
-  <script src="js/charts.js?v=2.7"></script>
-  <script src="js/app.js?v=2.7"></script>
+  <script src="js/parser.js?v=2.8"></script>
+  <script src="js/step_response.js?v=2.8"></script>
+  <script src="js/fft_analyzer.js?v=2.8"></script>
+  <script src="js/tuning_engine.js?v=2.8"></script>
+  <script src="js/simulator.js?v=2.8"></script>
+  <script src="js/drone_viewer.js?v=2.8"></script>
+  <script src="js/demo_data.js?v=2.8"></script>
+  <script src="js/charts.js?v=2.8"></script>
+  <script src="js/app.js?v=2.8"></script>
 </body>
 </html>
