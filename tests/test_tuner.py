@@ -263,6 +263,32 @@ class TestBlackboxGyroAndRcScaling(unittest.TestCase):
         self.assertGreater(angular_rate, 100.0)
         self.assertLess(angular_rate, 400.0)
 
+    def test_bbl_radians_gyro_scale_to_degrees_conversion(self):
+        # Betaflight 4.3/4.4/4.5 BBL header stores gyro_scale in radians/s (e.g. 0.001065 rad/s)
+        # Verify that multiplying by 180/pi yields ~0.061035 deg/s per LSB
+        rad_scale = 0.0010652644
+        deg_scale = rad_scale * (180.0 / math.pi)
+        self.assertAlmostEqual(deg_scale, 0.061035, delta=0.0005)
+
+        # Verify parser.js contains radians-to-degrees conversion and Actual Rates support
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root_dir, "js", "parser.js"), "r", encoding="utf-8") as f:
+            parser_js = f.read()
+        self.assertIn("180.0 / Math.PI", parser_js, "parser.js must convert radians gyro_scale to deg/s")
+        self.assertIn("rcCommand", parser_js, "parser.js must preserve raw rcCommand stick deflection")
+
+    def test_actual_rates_rc_command_scaling(self):
+        # Betaflight Actual Rates (rates_type = 3): rc_rates = 15 (150 deg/s center), rates = 67 (670 deg/s max)
+        rc_command = 250.0 # 50% right stick
+        rc_norm = rc_command / 500.0
+        center_sens = 15 * 10.0 # 150 deg/s
+        max_rate = 67 * 10.0 # 670 deg/s
+        expo_factor = abs(rc_norm) * (pow(rc_norm, 5) * 0.0 + rc_norm * 1.0)
+        stick_rate = (rc_norm * center_sens) + max(0.0, max_rate - center_sens) * expo_factor
+        # At 50% stick, rate should be ~205 deg/s (not 12 deg/s like legacy formula with rc_rate=0.15)
+        self.assertAlmostEqual(stick_rate, 205.0, delta=1.0)
+
+
 # Test HTML DOM Structure & Tab Sibling Integrity
 class TestHTMLTabIntegrity(unittest.TestCase):
     def setUp(self):

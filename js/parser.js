@@ -25,9 +25,9 @@ class BlackboxParser {
     this.time = [];
     this.throttle = [];
 
-    this.roll = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
-    this.pitch = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
-    this.yaw = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.roll = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.pitch = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.yaw = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
 
     this.motors = [[], [], [], []];
 
@@ -268,7 +268,9 @@ class BlackboxParser {
     const looptime = parseInt(this.metadata['looptime'] || '1000', 10);
     this.sampleRate = looptime > 0 ? Math.round(1e6 / looptime) : 1000;
 
-    // Parse gyroScale from header (e.g., gyro.scale:0x3d79c190)
+    // Parse gyroScale from header (e.g., gyro.scale:0x3f800000 or 0x38d1b717)
+    // In Betaflight Blackbox Explorer, firmware gyro.scale is in radians/s per LSB when < 0.002,
+    // and must be converted to deg/s via (180 / Math.PI) * 1e6 or 180 / Math.PI!
     let gyroScale = 1.0;
     const gyroScaleRaw = this.metadata['gyro_scale'] || this.metadata['gyro.scale'] || '';
     if (gyroScaleRaw) {
@@ -277,6 +279,14 @@ class BlackboxParser {
       } else {
         const pf = parseFloat(gyroScaleRaw);
         if (!isNaN(pf) && pf > 0) gyroScale = pf;
+      }
+      // Betaflight stores gyro.scale in radians/us (e.g. ~1e-9 to 1e-6) or radians/s (~0.001065)
+      if (gyroScale > 0 && gyroScale < 1e-4) {
+        // radians/microsecond -> deg/s
+        gyroScale = gyroScale * 1e6 * (180.0 / Math.PI);
+      } else if (gyroScale >= 1e-4 && gyroScale < 0.01) {
+        // radians/s -> deg/s
+        gyroScale = gyroScale * (180.0 / Math.PI);
       }
     }
     this.gyroScale = gyroScale;
@@ -438,13 +448,25 @@ class BlackboxParser {
       this.pitch.gyro.push(rawPitchGyro * gyroScale);
       this.yaw.gyro.push(rawYawGyro * gyroScale);
 
-      const rawRollSp = this.getBBLVal(rowValues, this.columnMap.rollSetpoint, 0);
-      const rawPitchSp = this.getBBLVal(rowValues, this.columnMap.pitchSetpoint, 0);
-      const rawYawSp = this.getBBLVal(rowValues, this.columnMap.yawSetpoint, 0);
+      // Raw stick deflection (-500 to +500)
+      const rawRollRc = this.getBBLVal(rowValues, this.columnMap.rollRc !== undefined ? this.columnMap.rollRc : this.columnMap.rollSetpoint, 0);
+      const rawPitchRc = this.getBBLVal(rowValues, this.columnMap.pitchRc !== undefined ? this.columnMap.pitchRc : this.columnMap.pitchSetpoint, 0);
+      const rawYawRc = this.getBBLVal(rowValues, this.columnMap.yawRc !== undefined ? this.columnMap.yawRc : this.columnMap.yawSetpoint, 0);
 
-      this.roll.setpoint.push(this.rcCommandToRate(rawRollSp, 0));
-      this.pitch.setpoint.push(this.rcCommandToRate(rawPitchSp, 1));
-      this.yaw.setpoint.push(this.rcCommandToRate(rawYawSp, 2));
+      this.roll.rcCommand.push(rawRollRc);
+      this.pitch.rcCommand.push(rawPitchRc);
+      this.yaw.rcCommand.push(rawYawRc);
+
+      const rawRollSp = this.getBBLVal(rowValues, this.columnMap.rollSetpoint, rawRollRc);
+      const rawPitchSp = this.getBBLVal(rowValues, this.columnMap.pitchSetpoint, rawPitchRc);
+      const rawYawSp = this.getBBLVal(rowValues, this.columnMap.yawSetpoint, rawYawRc);
+
+      // Yaw rcCommand in Betaflight is inverted relative to setpoint/gyro rate (-rcCommand[2] = +yaw rate)
+      const yawSign = (!this.columnMap.yawSetpointIsDeg && this.columnMap.yawSetpoint === this.columnMap.yawRc) ? -1 : 1;
+
+      this.roll.setpoint.push(this.columnMap.rollSetpointIsDeg ? rawRollSp : this.rcCommandToRate(rawRollSp, 0));
+      this.pitch.setpoint.push(this.columnMap.pitchSetpointIsDeg ? rawPitchSp : this.rcCommandToRate(rawPitchSp, 1));
+      this.yaw.setpoint.push(this.columnMap.yawSetpointIsDeg ? rawYawSp : this.rcCommandToRate(rawYawSp * yawSign, 2));
 
       this.roll.p.push(this.getBBLVal(rowValues, this.columnMap.rollP, 0));
       this.roll.i.push(this.getBBLVal(rowValues, this.columnMap.rollI, 0));
@@ -808,7 +830,10 @@ class BlackboxParser {
       this.throttle.push(th);
 
       // Roll
-      this.roll.setpoint.push(this.getVal(parts, this.columnMap.rollSetpoint));
+      const rollSpVal = this.getVal(parts, this.columnMap.rollSetpoint);
+      const rollRcVal = this.columnMap.rollRc !== undefined ? this.getVal(parts, this.columnMap.rollRc) : rollSpVal;
+      this.roll.rcCommand.push(rollRcVal);
+      this.roll.setpoint.push(rollSpVal);
       this.roll.gyro.push(this.getVal(parts, this.columnMap.rollGyro));
       this.roll.p.push(this.getVal(parts, this.columnMap.rollP));
       this.roll.i.push(this.getVal(parts, this.columnMap.rollI));
@@ -816,7 +841,10 @@ class BlackboxParser {
       this.roll.f.push(this.getVal(parts, this.columnMap.rollF));
 
       // Pitch
-      this.pitch.setpoint.push(this.getVal(parts, this.columnMap.pitchSetpoint));
+      const pitchSpVal = this.getVal(parts, this.columnMap.pitchSetpoint);
+      const pitchRcVal = this.columnMap.pitchRc !== undefined ? this.getVal(parts, this.columnMap.pitchRc) : pitchSpVal;
+      this.pitch.rcCommand.push(pitchRcVal);
+      this.pitch.setpoint.push(pitchSpVal);
       this.pitch.gyro.push(this.getVal(parts, this.columnMap.pitchGyro));
       this.pitch.p.push(this.getVal(parts, this.columnMap.pitchP));
       this.pitch.i.push(this.getVal(parts, this.columnMap.pitchI));
@@ -824,7 +852,10 @@ class BlackboxParser {
       this.pitch.f.push(this.getVal(parts, this.columnMap.pitchF));
 
       // Yaw
-      this.yaw.setpoint.push(this.getVal(parts, this.columnMap.yawSetpoint));
+      const yawSpVal = this.getVal(parts, this.columnMap.yawSetpoint);
+      const yawRcVal = this.columnMap.yawRc !== undefined ? this.getVal(parts, this.columnMap.yawRc) : yawSpVal;
+      this.yaw.rcCommand.push(yawRcVal);
+      this.yaw.setpoint.push(yawSpVal);
       this.yaw.gyro.push(this.getVal(parts, this.columnMap.yawGyro));
       this.yaw.p.push(this.getVal(parts, this.columnMap.yawP));
       this.yaw.i.push(this.getVal(parts, this.columnMap.yawI));
@@ -864,9 +895,9 @@ class BlackboxParser {
   resetTelemetryArrays() {
     this.time = [];
     this.throttle = [];
-    this.roll = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
-    this.pitch = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
-    this.yaw = { setpoint: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.roll = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.pitch = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
+    this.yaw = { setpoint: [], rcCommand: [], gyro: [], p: [], i: [], d: [], f: [] };
     this.motors = [[], [], [], []];
   }
 
@@ -876,33 +907,50 @@ class BlackboxParser {
       throw new Error(`Insufficient flight rows parsed (${this.totalSamples} rows found).`);
     }
 
-    // Auto-normalize Gyro if raw ADC counts (> 2000 max magnitude detected)
+    // Scan entire flight to check gyro and setpoint magnitudes
     let maxRollGyro = 0;
-    const checkCount = Math.min(this.totalSamples, 2000);
-    for (let i = 0; i < checkCount; i++) {
-      const g = Math.abs(this.roll.gyro[i]);
-      if (g > maxRollGyro) maxRollGyro = g;
+    let maxPitchGyro = 0;
+    let maxYawGyro = 0;
+    let maxRollSp = 0;
+
+    for (let i = 0; i < this.totalSamples; i++) {
+      const rg = Math.abs(this.roll.gyro[i]);
+      const pg = Math.abs(this.pitch.gyro[i]);
+      const yg = Math.abs(this.yaw.gyro[i]);
+      const sp = Math.abs(this.roll.setpoint[i]);
+      if (rg > maxRollGyro) maxRollGyro = rg;
+      if (pg > maxPitchGyro) maxPitchGyro = pg;
+      if (yg > maxYawGyro) maxYawGyro = yg;
+      if (sp > maxRollSp) maxRollSp = sp;
     }
-    if (maxRollGyro > 2000) {
-      const adcToDeg = 2000.0 / 32768.0; // 0.061035 LSB per deg/s
+
+    const maxAnyGyro = Math.max(maxRollGyro, maxPitchGyro, maxYawGyro);
+
+    // 1. If gyro values are huge (> 2200), they are unscaled raw 16-bit ADC counts
+    if (maxAnyGyro > 2200) {
+      const adcToDeg = 2000.0 / 32768.0; // 0.061035 deg/s per LSB
       for (let i = 0; i < this.totalSamples; i++) {
         this.roll.gyro[i] *= adcToDeg;
         this.pitch.gyro[i] *= adcToDeg;
         this.yaw.gyro[i] *= adcToDeg;
       }
     }
-
-    // Auto-normalize Setpoints if raw stick deflection (max <= 505 stick units detected)
-    let maxRollSp = 0;
-    for (let i = 0; i < checkCount; i++) {
-      const sp = Math.abs(this.roll.setpoint[i]);
-      if (sp > maxRollSp) maxRollSp = sp;
+    // 2. If gyro values are tiny (> 0 and < 12.0 across the entire flight), they were scaled in radians/s instead of deg/s
+    else if (maxAnyGyro > 0.05 && maxAnyGyro < 12.0) {
+      const radToDeg = 180.0 / Math.PI;
+      for (let i = 0; i < this.totalSamples; i++) {
+        this.roll.gyro[i] *= radToDeg;
+        this.pitch.gyro[i] *= radToDeg;
+        this.yaw.gyro[i] *= radToDeg;
+      }
     }
-    if (maxRollSp > 5 && maxRollSp <= 505) {
+
+    // 3. Auto-normalize Setpoints if raw stick deflection (max <= 505 stick units and not marked as deg/s)
+    if (!this.columnMap.rollSetpointIsDeg && maxRollSp > 2 && maxRollSp <= 505) {
       for (let i = 0; i < this.totalSamples; i++) {
         this.roll.setpoint[i] = this.rcCommandToRate(this.roll.setpoint[i], 0);
         this.pitch.setpoint[i] = this.rcCommandToRate(this.pitch.setpoint[i], 1);
-        this.yaw.setpoint[i] = this.rcCommandToRate(this.yaw.setpoint[i], 2);
+        this.yaw.setpoint[i] = this.rcCommandToRate(-this.yaw.setpoint[i], 2);
       }
     }
 
@@ -954,28 +1002,42 @@ class BlackboxParser {
 
   rcCommandToRate(rcCommand, axis = 0) {
     if (rcCommand === undefined || isNaN(rcCommand)) return 0;
-    // If setpoint is already scaled (magnitude > 500), return as-is
+    // If setpoint is already scaled (magnitude > 505), return as-is
     if (Math.abs(rcCommand) > 505) return rcCommand;
 
-    // rcCommand stick deflection: -500 to +500
+    // rcCommand stick deflection: -500 to +500 -> -1.0 to +1.0
     const deflection = Math.max(-1.0, Math.min(1.0, rcCommand / 500.0));
+    const absDef = Math.abs(deflection);
+    const sign = Math.sign(deflection);
 
-    // Rates metadata or default Betaflight rates (1.00 rcRate, 0.70 superRate, 0 expo)
-    const rcRates = this.parseRateArray(this.metadata['rc_rates'] || this.metadata['rc_rate'] || this.metadata['rcrate'], 100);
-    const superRates = this.parseRateArray(this.metadata['rates'] || this.metadata['super_expo_factor'] || this.metadata['super_rate'], 70);
+    // Check Betaflight rates_type (0 = Betaflight, 3 = Actual, 4 = QuickRates)
+    const ratesType = parseInt(this.metadata['rates_type'] || '0', 10);
+    const rcRates = this.parseRateArray(this.metadata['rc_rates'] || this.metadata['rc_rate'] || this.metadata['rcrate'], ratesType === 3 ? 20 : 100);
+    const superRates = this.parseRateArray(this.metadata['rates'] || this.metadata['super_expo_factor'] || this.metadata['super_rate'], 67);
     const rcExpos = this.parseRateArray(this.metadata['rc_expo'] || this.metadata['rcexpo'], 0);
 
-    const rcRate = (rcRates[axis] || 100) / 100.0;
-    const superRate = (superRates[axis] || 70) / 100.0;
     const expo = (rcExpos[axis] || 0) / 100.0;
+
+    // Actual Rates (Betaflight 4.3+ default: rates_type = 3)
+    // rc_rates = center sensitivity / 10 (e.g. 20 = 200 deg/s), rates = max rate / 10 (e.g. 67 = 670 deg/s)
+    if (ratesType === 3 || (rcRates[axis] < 45 && superRates[axis] >= 40)) {
+      const centerSens = (rcRates[axis] || 20) * 10.0;
+      const maxRate = Math.max(centerSens, (superRates[axis] || 67) * 10.0);
+      const expof = absDef * (Math.pow(absDef, 5) * expo + absDef * (1.0 - expo));
+      return sign * (absDef * centerSens + (maxRate - centerSens) * expof);
+    }
+
+    // Legacy Betaflight Rates
+    const rcRate = (rcRates[axis] > 200 ? 2.0 : (rcRates[axis] || 100) / 100.0);
+    const superRate = Math.min(0.95, (superRates[axis] || 70) / 100.0);
 
     let d = deflection;
     if (expo > 0) {
-      d = d * Math.pow(Math.abs(d), 3) * expo + d * (1.0 - expo);
+      d = d * Math.pow(absDef, 3) * expo + d * (1.0 - expo);
     }
     let rate = rcRate * d * 200.0;
     if (superRate > 0) {
-      const denom = Math.max(0.01, 1.0 - Math.abs(deflection) * superRate);
+      const denom = Math.max(0.01, 1.0 - absDef * superRate);
       rate = rate / denom;
     }
     return rate;
@@ -1011,6 +1073,11 @@ class BlackboxParser {
       if (/throttle|rccommand\[3\]|rc\[3\]/i.test(lower)) {
         colMap.throttle = idx;
       }
+
+      // Raw RC Stick Deflection (-500..+500)
+      if (/rccommand\[0\]|rc_roll|roll_rc/i.test(lower)) colMap.rollRc = idx;
+      if (/rccommand\[1\]|rc_pitch|pitch_rc/i.test(lower)) colMap.pitchRc = idx;
+      if (/rccommand\[2\]|rc_yaw|yaw_rc/i.test(lower)) colMap.yawRc = idx;
 
       // Roll Setpoint / RC (prioritize pre-scaled deg/s target)
       if (/^setpoint\[0\]|^rccommands\[0\]|^axisrate\[0\]/i.test(lower)) {

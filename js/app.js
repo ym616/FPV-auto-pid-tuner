@@ -335,6 +335,11 @@ class AeroPIDApp {
             const sel = document.getElementById('selectCellCount');
             if (sel) sel.value = String(autoConfig.detectedCells);
           }
+        } else {
+          // Reset baseline to selected quad preset so previous log's PIDs do not carry over
+          const quadType = document.getElementById('quadTypeSelect')?.value || '5in_freestyle_6s';
+          const preset = this.tuningEngine.defaultPresets[quadType] || this.tuningEngine.defaultPresets['5in_freestyle_6s'];
+          this.currentConfig = JSON.parse(JSON.stringify(preset));
         }
 
         // Feed data to interactive 3D drone & stick viewer
@@ -346,7 +351,7 @@ class AeroPIDApp {
 
         const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox Binary (.bbl)' : 'CSV';
         const sessionInfo = this.currentData.totalSessions > 1 ? ` [Flight ${this.currentData.sessionIndex} of ${this.currentData.totalSessions}]` : '';
-        this.showToast(`Analyzed ${typeLabel}${sessionInfo} successfully!`);
+        this.showToast(`Analyzed ${typeLabel}${sessionInfo} — Health Score: ${this.recommendation?.overallHealth ?? '--'}/100`);
       } catch (uiErr) {
         console.error('UI Render Warning:', uiErr);
       }
@@ -453,10 +458,10 @@ class AeroPIDApp {
     this.stepAnalyzer.setSampleRate(d.sampleRate);
     this.fftAnalyzer.setSampleRate(d.sampleRate);
 
-    // 1. Adaptive Step Response Analysis
-    const rollStep = this.stepAnalyzer.analyzeAxis(d.roll.setpoint, d.roll.gyro, d.time, { minStepRate: 80 });
-    const pitchStep = this.stepAnalyzer.analyzeAxis(d.pitch.setpoint, d.pitch.gyro, d.time, { minStepRate: 80 });
-    const yawStep = this.stepAnalyzer.analyzeAxis(d.yaw.setpoint, d.yaw.gyro, d.time, { minStepRate: 60 });
+    // 1. Adaptive Step Response Analysis (auto-scaled thresholds per axis)
+    const rollStep = this.stepAnalyzer.analyzeAxis(d.roll.setpoint, d.roll.gyro, d.time);
+    const pitchStep = this.stepAnalyzer.analyzeAxis(d.pitch.setpoint, d.pitch.gyro, d.time);
+    const yawStep = this.stepAnalyzer.analyzeAxis(d.yaw.setpoint, d.yaw.gyro, d.time);
 
     this.stepResults = { roll: rollStep, pitch: pitchStep, yaw: yawStep };
 
@@ -510,16 +515,27 @@ class AeroPIDApp {
     if (!rec) return;
 
     // Health Score & Dynamic Description
-    document.getElementById('healthScoreNum').innerText = rec.overallHealth;
+    const scoreNumEl = document.getElementById('healthScoreNum');
+    if (scoreNumEl) scoreNumEl.innerText = rec.overallHealth;
     const scoreDescEl = document.getElementById('healthScoreDesc');
     if (scoreDescEl && rec.healthDescription) {
       scoreDescEl.innerText = rec.healthDescription;
     }
 
     const scoreCircle = document.querySelector('.score-circle');
-    if (rec.overallHealth >= 80) scoreCircle.style.borderColor = '#137333';
-    else if (rec.overallHealth >= 60) scoreCircle.style.borderColor = '#ea8600';
-    else scoreCircle.style.borderColor = '#c5221f';
+    if (scoreCircle) {
+      if (rec.overallHealth >= 80) scoreCircle.style.borderColor = '#137333';
+      else if (rec.overallHealth >= 60) scoreCircle.style.borderColor = '#ea8600';
+      else scoreCircle.style.borderColor = '#c5221f';
+    }
+
+    // Visual flash on score box so user sees immediate update
+    const scoreBox = document.querySelector('.overall-score-box');
+    if (scoreBox) {
+      scoreBox.classList.remove('flash-update');
+      void scoreBox.offsetWidth;
+      scoreBox.classList.add('flash-update');
+    }
 
     // Submetrics
     const rollM = this.stepResults.roll.metrics;
