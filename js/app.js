@@ -318,7 +318,14 @@ class AeroPIDApp {
 
         this.parser.parse(buffer, null, file.name);
         this.currentData = this.parser.getDataSummary();
+      } catch (err) {
+        console.error(err);
+        this.setStatus('Parse error', 'danger');
+        alert(`Failed to parse file: ${err.message}\n\nPlease verify that this file is an authentic Betaflight Blackbox log (.bbl / .bfl) or a telemetry CSV.`);
+        return;
+      }
 
+      try {
         // Automatically extract PID and battery configuration from Blackbox metadata
         const autoConfig = this.tuningEngine.extractConfigFromLog(this.currentData.metadata);
         if (autoConfig) {
@@ -340,10 +347,8 @@ class AeroPIDApp {
         const typeLabel = this.currentData.fileType === 'BBL_BINARY' ? 'Blackbox Binary (.bbl)' : 'CSV';
         const sessionInfo = this.currentData.totalSessions > 1 ? ` [Flight ${this.currentData.sessionIndex} of ${this.currentData.totalSessions}]` : '';
         this.showToast(`Analyzed ${typeLabel}${sessionInfo} successfully!`);
-      } catch (err) {
-        console.error(err);
-        this.setStatus('Parse error', 'danger');
-        alert(`Failed to parse file: ${err.message}\n\nPlease verify that this file is an authentic Betaflight Blackbox log (.bbl / .bfl) or a telemetry CSV.`);
+      } catch (uiErr) {
+        console.error('UI Render Warning:', uiErr);
       }
     };
 

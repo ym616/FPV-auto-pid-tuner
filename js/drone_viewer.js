@@ -381,8 +381,8 @@ class DroneOrientationViewer {
   drawWaveform() {
     if (!this.ctxWaveform || !this.canvasWaveform || !this.trajectory || this.trajectory.length === 0) return;
     const rect = this.canvasWaveform.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    const w = rect.width > 0 && Number.isFinite(rect.width) ? rect.width : 600;
+    const h = rect.height > 0 && Number.isFinite(rect.height) ? rect.height : 42;
     const ctx = this.ctxWaveform;
 
     ctx.clearRect(0, 0, w, h);
@@ -433,7 +433,7 @@ class DroneOrientationViewer {
     });
 
     // Playhead indicator
-    const currentX = (this.currentIndex / (len - 1)) * w;
+    const currentX = (this.currentIndex / Math.max(1, len - 1)) * w;
     ctx.fillStyle = '#c5221f';
     ctx.fillRect(currentX - 1.5, 0, 3, h);
   }
@@ -445,8 +445,8 @@ class DroneOrientationViewer {
   renderDrone3D(cur) {
     if (!this.ctx3D || !this.canvas3D) return;
     const rect = this.canvas3D.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    const w = rect.width > 0 && Number.isFinite(rect.width) ? rect.width : 600;
+    const h = rect.height > 0 && Number.isFinite(rect.height) ? rect.height : 380;
     const ctx = this.ctx3D;
 
     ctx.clearRect(0, 0, w, h);
@@ -667,13 +667,16 @@ class DroneOrientationViewer {
       ctx.stroke();
 
       // Propeller Disc Rotation Blur
-      const curPropR = Math.max(12, propRadius * radScale * 0.55);
-      const pGrad = ctx.createRadialGradient(mp.x, mp.y, curPropR * 0.2, mp.x, mp.y, curPropR);
+      const rawPropR = propRadius * radScale * 0.55;
+      const curPropR = Math.max(12, Number.isFinite(rawPropR) ? rawPropR : 20);
+      const safeMpX = Number.isFinite(mp.x) ? mp.x : cx;
+      const safeMpY = Number.isFinite(mp.y) ? mp.y : cy;
+      const pGrad = ctx.createRadialGradient(safeMpX, safeMpY, curPropR * 0.2, safeMpX, safeMpY, curPropR);
       pGrad.addColorStop(0, m.isFront ? 'rgba(11, 87, 208, 0.4)' : 'rgba(217, 119, 6, 0.4)');
       pGrad.addColorStop(1, 'rgba(255, 255, 255, 0.05)');
 
       ctx.beginPath();
-      ctx.arc(mp.x, mp.y, curPropR, 0, Math.PI * 2);
+      ctx.arc(safeMpX, safeMpY, curPropR, 0, Math.PI * 2);
       ctx.fillStyle = pGrad;
       ctx.fill();
       ctx.strokeStyle = m.isFront ? 'rgba(11, 87, 208, 0.5)' : 'rgba(217, 119, 6, 0.5)';
@@ -683,10 +686,10 @@ class DroneOrientationViewer {
       // Propeller Blades (3-Blade)
       for (let b = 0; b < 3; b++) {
         const bladeAng = this.propSpinAngle + (b * (Math.PI * 2) / 3);
-        const bx = mp.x + Math.cos(bladeAng) * curPropR * 0.95;
-        const by = mp.y + Math.sin(bladeAng) * curPropR * 0.95;
+        const bx = safeMpX + Math.cos(bladeAng) * curPropR * 0.95;
+        const by = safeMpY + Math.sin(bladeAng) * curPropR * 0.95;
         ctx.beginPath();
-        ctx.moveTo(mp.x, mp.y);
+        ctx.moveTo(safeMpX, safeMpY);
         ctx.lineTo(bx, by);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
         ctx.lineWidth = 2;
@@ -708,8 +711,8 @@ class DroneOrientationViewer {
   renderGimbals(cur) {
     if (!this.ctxGimbals || !this.canvasGimbals) return;
     const rect = this.canvasGimbals.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    const w = rect.width > 0 && Number.isFinite(rect.width) ? rect.width : 380;
+    const h = rect.height > 0 && Number.isFinite(rect.height) ? rect.height : 380;
     const ctx = this.ctxGimbals;
 
     ctx.clearRect(0, 0, w, h);

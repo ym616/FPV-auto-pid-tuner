@@ -12,6 +12,8 @@ class TelemetryCanvasChart {
     }
     this.ctx = this.canvas.getContext('2d');
     this.dpr = window.devicePixelRatio || 1;
+    this.width = this.canvas.clientWidth || this.canvas.width || 480;
+    this.height = this.canvas.clientHeight || this.canvas.height || 260;
     this.setupResize();
   }
 
@@ -19,17 +21,21 @@ class TelemetryCanvasChart {
     this.resize = () => {
       if (!this.canvas) return;
       const rect = this.canvas.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      this.width = rect.width;
-      this.height = rect.height;
-      this.canvas.width = Math.floor(rect.width * this.dpr);
-      this.canvas.height = Math.floor(rect.height * this.dpr);
-      if (this.ctx.resetTransform) {
-        this.ctx.resetTransform();
-      } else {
-        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      if (rect.width > 0 && rect.height > 0 && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+        this.width = rect.width;
+        this.height = rect.height;
+        this.canvas.width = Math.floor(rect.width * this.dpr);
+        this.canvas.height = Math.floor(rect.height * this.dpr);
+        if (this.ctx.resetTransform) {
+          this.ctx.resetTransform();
+        } else {
+          this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        }
+        this.ctx.scale(this.dpr, this.dpr);
+      } else if (!Number.isFinite(this.width) || !Number.isFinite(this.height) || this.width <= 0 || this.height <= 0) {
+        this.width = 480;
+        this.height = 260;
       }
-      this.ctx.scale(this.dpr, this.dpr);
     };
     this.resize();
     window.addEventListener('resize', () => {
@@ -39,6 +45,7 @@ class TelemetryCanvasChart {
   }
 
   clear() {
+    if (!this.ctx || !Number.isFinite(this.width) || !Number.isFinite(this.height)) return;
     this.ctx.clearRect(0, 0, this.width, this.height);
   }
 
@@ -47,14 +54,16 @@ class TelemetryCanvasChart {
    */
   renderStepResponse(data, options = {}) {
     this.lastRenderFn = () => this.renderStepResponse(data, options);
+    this.resize();
+    if (!this.ctx || !Number.isFinite(this.width) || !Number.isFinite(this.height) || this.width <= 0 || this.height <= 0) return;
     this.clear();
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
 
     const pad = { top: 32, right: 30, bottom: 36, left: 45 };
-    const plotW = w - pad.left - pad.right;
-    const plotH = h - pad.top - pad.bottom;
+    const plotW = Math.max(10, w - pad.left - pad.right);
+    const plotH = Math.max(10, h - pad.top - pad.bottom);
 
     if (!data || !data.timeMs || !data.responseCurve || data.responseCurve.length === 0) {
       ctx.fillStyle = '#5f6368';
@@ -211,14 +220,16 @@ class TelemetryCanvasChart {
    */
   renderFFTSpectrum(data, options = {}) {
     this.lastRenderFn = () => this.renderFFTSpectrum(data, options);
+    this.resize();
+    if (!this.ctx || !Number.isFinite(this.width) || !Number.isFinite(this.height) || this.width <= 0 || this.height <= 0) return;
     this.clear();
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
 
     const pad = { top: 32, right: 25, bottom: 36, left: 45 };
-    const plotW = w - pad.left - pad.right;
-    const plotH = h - pad.top - pad.bottom;
+    const plotW = Math.max(10, w - pad.left - pad.right);
+    const plotH = Math.max(10, h - pad.top - pad.bottom);
 
     if (!data || !data.frequencies || !data.psdDb || data.psdDb.length === 0) {
       ctx.fillStyle = '#5f6368';
@@ -347,14 +358,16 @@ class TelemetryCanvasChart {
    */
   renderTimeline(time, setpoint, gyro, throttle, options = {}) {
     this.lastRenderFn = () => this.renderTimeline(time, setpoint, gyro, throttle, options);
+    this.resize();
+    if (!this.ctx || !Number.isFinite(this.width) || !Number.isFinite(this.height) || this.width <= 0 || this.height <= 0) return;
     this.clear();
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
 
     const pad = { top: 25, right: 30, bottom: 30, left: 45 };
-    const plotW = w - pad.left - pad.right;
-    const plotH = h - pad.top - pad.bottom;
+    const plotW = Math.max(10, w - pad.left - pad.right);
+    const plotH = Math.max(10, h - pad.top - pad.bottom);
 
     if (!time || time.length === 0) {
       ctx.fillStyle = '#5f6368';
