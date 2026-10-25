@@ -19,7 +19,7 @@ const DemoFlightData = {
           yaw: { p: 48, i: 90, d: 0, f: 110, dMax: 0 }
         },
         masterMultiplier: 1.05,
-        antiGravity: 3500,
+        antiGravity: 80,
         tpaRate: 0.65,
         tpaBreakpoint: 1350,
         gyroFilterSlider: 1.0,
@@ -50,7 +50,7 @@ const DemoFlightData = {
           yaw: { p: 45, i: 85, d: 0, f: 100, dMax: 0 }
         },
         masterMultiplier: 0.95,
-        antiGravity: 3000,
+        antiGravity: 70,
         tpaRate: 0.65,
         tpaBreakpoint: 1350,
         gyroFilterSlider: 0.85,
@@ -81,7 +81,7 @@ const DemoFlightData = {
           yaw: { p: 42, i: 80, d: 0, f: 100, dMax: 0 }
         },
         masterMultiplier: 1.15,
-        antiGravity: 3800,
+        antiGravity: 85,
         tpaRate: 0.50,
         tpaBreakpoint: 1400,
         gyroFilterSlider: 1.3,
@@ -112,7 +112,7 @@ const DemoFlightData = {
           yaw: { p: 40, i: 85, d: 0, f: 70, dMax: 0 }
         },
         masterMultiplier: 0.80,
-        antiGravity: 3500,
+        antiGravity: 80,
         tpaRate: 0.75,
         tpaBreakpoint: 1250,
         gyroFilterSlider: 0.70,
@@ -143,7 +143,7 @@ const DemoFlightData = {
           yaw: { p: 48, i: 90, d: 0, f: 115, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 3800,
+        antiGravity: 85,
         tpaRate: 0.65,
         tpaBreakpoint: 1350,
         gyroFilterSlider: 1.15,

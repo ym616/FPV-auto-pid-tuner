@@ -15,7 +15,7 @@ class TuningEngine {
           yaw: { p: 48, i: 90, d: 0, f: 115, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 3500,
+        antiGravity: 80,
         tpaRate: 0.65,
         tpaBreakpoint: 1350,
         gyroFilterSlider: 1.0,
@@ -32,7 +32,7 @@ class TuningEngine {
           yaw: { p: 42, i: 80, d: 0, f: 105, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 3800,
+        antiGravity: 85,
         tpaRate: 0.65,
         tpaBreakpoint: 1300,
         gyroFilterSlider: 1.30,
@@ -49,7 +49,7 @@ class TuningEngine {
           yaw: { p: 42, i: 80, d: 0, f: 100, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 3800,
+        antiGravity: 85,
         tpaRate: 0.60,
         tpaBreakpoint: 1300,
         gyroFilterSlider: 1.1,
@@ -66,7 +66,7 @@ class TuningEngine {
           yaw: { p: 55, i: 95, d: 0, f: 85, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 4200,
+        antiGravity: 90,
         tpaRate: 0.75,
         tpaBreakpoint: 1250,
         gyroFilterSlider: 0.85,
@@ -83,7 +83,7 @@ class TuningEngine {
           yaw: { p: 55, i: 85, d: 0, f: 90, dMax: 0 }
         },
         masterMultiplier: 1.0,
-        antiGravity: 4500,
+        antiGravity: 95,
         tpaRate: 0.50,
         tpaBreakpoint: 1400,
         gyroFilterSlider: 1.2,
@@ -138,11 +138,11 @@ class TuningEngine {
       dtermFilterSlider = 0.85;
     }
 
-    // 4. Anti-Gravity Gain based on disk loading
+    // 4. Anti-Gravity Gain based on disk loading (Betaflight 4.4/4.5 range: 0 - 250, default 80)
     const diskArea = Math.PI * Math.pow(prop / 2, 2);
     const diskLoading = weight / diskArea; // g/sq inch
-    let antiGravity = Math.round(3200 + (diskLoading - 15) * 35);
-    antiGravity = Math.max(3200, Math.min(4800, antiGravity));
+    let antiGravity = Math.round(75 + (diskLoading - 15) * 0.75);
+    antiGravity = Math.max(65, Math.min(130, antiGravity));
 
     // 5. TPA based on voltage & prop size
     let tpaBreakpoint = 1350;
@@ -505,7 +505,7 @@ class TuningEngine {
         recPids.pitch.dMax = Math.max(recPids.pitch.dMax, Math.round(recPids.pitch.dMax * (pwScale + 0.04)));
       }
       recDynamicIdle = Math.min(55, Math.round(recDynamicIdle * 1.18));
-      recAntiGravity = Math.min(5000, Math.round(recAntiGravity * 1.12));
+      recAntiGravity = Math.min(200, Math.round(recAntiGravity * 1.12));
     }
 
     // 4. Punchout Drift / Anti-Gravity
@@ -515,7 +515,7 @@ class TuningEngine {
         description: "Nose rises or dips during rapid full throttle bursts due to aerodynamic pitch moment.",
         type: "warning"
       });
-      recAntiGravity = Math.min(6000, Math.round(recAntiGravity * 1.35));
+      recAntiGravity = Math.min(220, Math.round(recAntiGravity * 1.25));
       recPids.pitch.i = Math.round(recPids.pitch.i * 1.12);
     }
 
@@ -544,26 +544,26 @@ class TuningEngine {
     this.addDiff(diffList, "Master Multiplier", current.masterMultiplier, recMasterMultiplier, "x", "Overall flight controller authority");
     this.addDiff(diffList, "Roll P-Gain", current.pids.roll.p, recPids.roll.p, "", "Roll tracking speed");
     this.addDiff(diffList, "Roll I-Gain", current.pids.roll.i, recPids.roll.i, "", "Roll steady-state attitude hold");
-    this.addDiff(diffList, "Roll D-Gain", current.pids.roll.d, recPids.roll.d, "", "Roll overshoot damping");
-    this.addDiff(diffList, "Roll D-Max", current.pids.roll.dMax, recPids.roll.dMax, "", "Dynamic D boost on fast roll flicks");
+    this.addDiff(diffList, "Roll D-Min (Base D)", current.pids.roll.d, recPids.roll.d, "", "Roll steady-state D damping (d_min_roll)");
+    this.addDiff(diffList, "Roll D-Max (Peak D)", current.pids.roll.dMax, recPids.roll.dMax, "", "Peak D boost on fast roll flicks (d_roll)");
     this.addDiff(diffList, "Roll Feedforward", current.pids.roll.f, recPids.roll.f, "", "Stick acceleration feedforward");
 
     this.addDiff(diffList, "Pitch P-Gain", current.pids.pitch.p, recPids.pitch.p, "", "Pitch tracking speed");
     this.addDiff(diffList, "Pitch I-Gain", current.pids.pitch.i, recPids.pitch.i, "", "Pitch steady-state attitude hold");
-    this.addDiff(diffList, "Pitch D-Gain", current.pids.pitch.d, recPids.pitch.d, "", "Pitch bounce-back damping");
-    this.addDiff(diffList, "Pitch D-Max", current.pids.pitch.dMax, recPids.pitch.dMax, "", "Dynamic D boost on rapid pitch flips");
+    this.addDiff(diffList, "Pitch D-Min (Base D)", current.pids.pitch.d, recPids.pitch.d, "", "Pitch steady-state D damping (d_min_pitch)");
+    this.addDiff(diffList, "Pitch D-Max (Peak D)", current.pids.pitch.dMax, recPids.pitch.dMax, "", "Peak D boost on rapid pitch flips (d_pitch)");
     this.addDiff(diffList, "Pitch Feedforward", current.pids.pitch.f, recPids.pitch.f, "", "Stick acceleration feedforward");
 
     this.addDiff(diffList, "Yaw P-Gain", current.pids.yaw.p, recPids.yaw.p, "", "Yaw authority");
     this.addDiff(diffList, "Yaw I-Gain", current.pids.yaw.i, recPids.yaw.i, "", "Yaw heading hold");
     this.addDiff(diffList, "Yaw Feedforward", current.pids.yaw.f, recPids.yaw.f, "", "Yaw snap response");
 
-    this.addDiff(diffList, "Anti-Gravity Gain", current.antiGravity, recAntiGravity, "", "Throttle punch attitude stabilization");
+    this.addDiff(diffList, "Anti-Gravity Gain", current.antiGravity, recAntiGravity, "", "Throttle punch stabilization (0-250)");
     this.addDiff(diffList, "TPA Rate", current.tpaRate, recTpaRate, "", "High-throttle D-term attenuation");
     this.addDiff(diffList, "TPA Breakpoint", current.tpaBreakpoint, recTpaBreakpoint, "us", "Throttle threshold for TPA activation");
     this.addDiff(diffList, "Gyro Filter Slider", current.gyroFilterSlider, recGyroSlider, "x", "Phase lag vs noise suppression");
     this.addDiff(diffList, "D-Term Filter Slider", current.dtermFilterSlider, recDtermSlider, "x", "D-term noise filtering / motor heat");
-    this.addDiff(diffList, "Dynamic Idle (RPM)", current.dynamicIdle, recDynamicIdle, "00 RPM", "Prevents motor stalling in propwash");
+    this.addDiff(diffList, "Dynamic Idle (x100 RPM)", current.dynamicIdle, recDynamicIdle, "x100", "Prevents motor desync in propwash (0-200)");
 
     // Continuous, well-proportioned Flight Tune Health Score (35 to 99)
     // Weighted across: Pitch Tracking (35%), Roll Tracking (30%), Noise Floor (20%), Propwash & Yaw (15%)
@@ -713,48 +713,69 @@ class TuningEngine {
 
   generateCliScript(rec) {
     const maneuversText = rec.stepCount ? `${rec.stepCount} step flicks analyzed` : 'Continuous flight tracking deconvolution';
+
+    // Ensure Betaflight 4.3/4.4/4.5 compliant ranges & names:
+    // - In Betaflight CLI, `d_roll` / `d_pitch` is D-Max (peak D) and `d_min_roll` / `d_min_pitch` is base steady-state D
+    // - `simplified_master_multiplier` is integer 0..200 (100 = 1.0x)
+    // - `anti_gravity_gain` in BF 4.4/4.5 is integer 0..250 (default 80)
+    // - `dyn_idle_min_rpm` is integer 0..200 (in units of 100 RPM, so 45 = 4500 RPM)
+    // - `simplified_gyro_filter_multiplier` and `simplified_dterm_filter_multiplier` are integers 0..200 (100 = 1.0x)
+    const dMinRoll = Math.max(0, Math.min(200, Math.round(rec.recPids.roll.d)));
+    const dMaxRoll = Math.max(dMinRoll, Math.min(200, Math.round(rec.recPids.roll.dMax || rec.recPids.roll.d)));
+    const dMinPitch = Math.max(0, Math.min(200, Math.round(rec.recPids.pitch.d)));
+    const dMaxPitch = Math.max(dMinPitch, Math.min(200, Math.round(rec.recPids.pitch.dMax || rec.recPids.pitch.d)));
+
+    const masterMultInt = Math.max(10, Math.min(200, Math.round((rec.recMasterMultiplier || 1.0) * 100)));
+    const rawAg = rec.recAntiGravity || 80;
+    const antiGravityInt = Math.max(0, Math.min(250, rawAg > 250 ? Math.round(rawAg / 45) : Math.round(rawAg)));
+    const tpaRateInt = Math.max(0, Math.min(100, Math.round((rec.recTpaRate || 0.65) * 100)));
+    const tpaBreakInt = Math.max(1000, Math.min(2000, Math.round(rec.recTpaBreakpoint || 1350)));
+    const rawDynIdle = rec.recDynamicIdle || 40;
+    const dynIdleInt = Math.max(0, Math.min(200, rawDynIdle > 200 ? Math.round(rawDynIdle / 100) : Math.round(rawDynIdle)));
+    const gyroMultInt = Math.max(10, Math.min(200, Math.round((rec.recGyroSlider || 1.0) * 100)));
+    const dtermMultInt = Math.max(10, Math.min(200, Math.round((rec.recDtermSlider || 1.0) * 100)));
+
     const lines = [
       `# ======================================================`,
-      `# AeroPID Pro - Betaflight Custom Tune`,
+      `# AeroPID Pro - Betaflight 4.3 / 4.4 / 4.5 Custom Tune`,
       `# Source Log: ${rec.logName}`,
       `# Flight Telemetry: ${rec.duration ? rec.duration + 's duration' : 'N/A'} @ ${rec.sampleRate ? rec.sampleRate + ' Hz' : '1000 Hz'}${rec.totalSamples ? ' (' + rec.totalSamples.toLocaleString() + ' frames)' : ''}`,
       `# Analysis Basis: ${maneuversText}`,
       `# Base Profile: ${rec.quadName}`,
       `# ======================================================`,
       ``,
-      `# --- Master Multiplier ---`,
-      `set master_multiplier = ${rec.recMasterMultiplier}`,
+      `# --- Roll PID, D-Min & Feedforward ---`,
+      `set p_roll = ${Math.round(rec.recPids.roll.p)}`,
+      `set i_roll = ${Math.round(rec.recPids.roll.i)}`,
+      `set d_roll = ${dMaxRoll}`,
+      `set d_min_roll = ${dMinRoll}`,
+      `set f_roll = ${Math.round(rec.recPids.roll.f)}`,
       ``,
-      `# --- Roll PID & Feedforward ---`,
-      `set p_roll = ${rec.recPids.roll.p}`,
-      `set i_roll = ${rec.recPids.roll.i}`,
-      `set d_roll = ${rec.recPids.roll.d}`,
-      `set f_roll = ${rec.recPids.roll.f}`,
-      `set d_max_roll = ${rec.recPids.roll.dMax}`,
-      ``,
-      `# --- Pitch PID & Feedforward ---`,
-      `set p_pitch = ${rec.recPids.pitch.p}`,
-      `set i_pitch = ${rec.recPids.pitch.i}`,
-      `set d_pitch = ${rec.recPids.pitch.d}`,
-      `set f_pitch = ${rec.recPids.pitch.f}`,
-      `set d_max_pitch = ${rec.recPids.pitch.dMax}`,
+      `# --- Pitch PID, D-Min & Feedforward ---`,
+      `set p_pitch = ${Math.round(rec.recPids.pitch.p)}`,
+      `set i_pitch = ${Math.round(rec.recPids.pitch.i)}`,
+      `set d_pitch = ${dMaxPitch}`,
+      `set d_min_pitch = ${dMinPitch}`,
+      `set f_pitch = ${Math.round(rec.recPids.pitch.f)}`,
       ``,
       `# --- Yaw PID & Feedforward ---`,
-      `set p_yaw = ${rec.recPids.yaw.p}`,
-      `set i_yaw = ${rec.recPids.yaw.i}`,
-      `set d_yaw = ${rec.recPids.yaw.d}`,
-      `set f_yaw = ${rec.recPids.yaw.f}`,
+      `set p_yaw = ${Math.round(rec.recPids.yaw.p)}`,
+      `set i_yaw = ${Math.round(rec.recPids.yaw.i)}`,
+      `set d_yaw = ${Math.round(rec.recPids.yaw.d)}`,
+      `set d_min_yaw = 0`,
+      `set f_yaw = ${Math.round(rec.recPids.yaw.f)}`,
       ``,
-      `# --- Anti-Gravity & Throttle Attenuation ---`,
-      `set anti_gravity_gain = ${rec.recAntiGravity}`,
-      `set tpa_rate = ${Math.round(rec.recTpaRate * 100)}`,
-      `set tpa_breakpoint = ${rec.recTpaBreakpoint}`,
+      `# --- Master Multiplier & Simplified Sliders ---`,
+      `set simplified_pids_mode = OFF`,
+      `set simplified_master_multiplier = ${masterMultInt}`,
+      `set simplified_gyro_filter_multiplier = ${gyroMultInt}`,
+      `set simplified_dterm_filter_multiplier = ${dtermMultInt}`,
       ``,
-      `# --- Filters & Dynamic Idle ---`,
-      `set dyn_idle_min_rpm = ${rec.recDynamicIdle * 100}`,
-      `# Note: In Betaflight Configurator Tuning Tab:`,
-      `# Set Gyro Filter Slider to: ${rec.recGyroSlider}x`,
-      `# Set D-Term Filter Slider to: ${rec.recDtermSlider}x`,
+      `# --- Anti-Gravity, TPA & Dynamic Idle ---`,
+      `set anti_gravity_gain = ${antiGravityInt}`,
+      `set tpa_rate = ${tpaRateInt}`,
+      `set tpa_breakpoint = ${tpaBreakInt}`,
+      `set dyn_idle_min_rpm = ${dynIdleInt}`,
       ``,
       `save`
     ];
@@ -769,6 +790,7 @@ class TuningEngine {
     if (!diffText) return null;
     const lines = diffText.split(/\r?\n/);
     const config = JSON.parse(JSON.stringify(this.defaultPresets['5in_freestyle_6s']));
+    let foundAny = false;
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
@@ -778,34 +800,64 @@ class TuningEngine {
       if (match) {
         const key = match[1].toLowerCase();
         const val = parseFloat(match[2]);
+        if (isNaN(val)) continue;
+        foundAny = true;
 
-        // Map Betaflight CLI keys
-        if (key === 'master_multiplier') config.masterMultiplier = val;
+        // Map Betaflight CLI keys (supports both 4.3/4.4/4.5 official names and legacy aliases)
+        if (key === 'simplified_master_multiplier' || key === 'master_multiplier') {
+          config.masterMultiplier = val > 5 ? +(val / 100).toFixed(2) : val;
+        }
         else if (key === 'p_roll') config.pids.roll.p = Math.round(val);
         else if (key === 'i_roll') config.pids.roll.i = Math.round(val);
-        else if (key === 'd_roll') config.pids.roll.d = Math.round(val);
-        else if (key === 'f_roll') config.pids.roll.f = Math.round(val);
+        else if (key === 'd_roll') {
+          config.pids.roll.dMax = Math.round(val);
+          if (!config._hasDMinRoll) config.pids.roll.d = Math.round(val * 0.85);
+        }
+        else if (key === 'd_min_roll') {
+          config.pids.roll.d = Math.round(val);
+          config._hasDMinRoll = true;
+        }
         else if (key === 'd_max_roll') config.pids.roll.dMax = Math.round(val);
+        else if (key === 'f_roll') config.pids.roll.f = Math.round(val);
 
         else if (key === 'p_pitch') config.pids.pitch.p = Math.round(val);
         else if (key === 'i_pitch') config.pids.pitch.i = Math.round(val);
-        else if (key === 'd_pitch') config.pids.pitch.d = Math.round(val);
-        else if (key === 'f_pitch') config.pids.pitch.f = Math.round(val);
+        else if (key === 'd_pitch') {
+          config.pids.pitch.dMax = Math.round(val);
+          if (!config._hasDMinPitch) config.pids.pitch.d = Math.round(val * 0.85);
+        }
+        else if (key === 'd_min_pitch') {
+          config.pids.pitch.d = Math.round(val);
+          config._hasDMinPitch = true;
+        }
         else if (key === 'd_max_pitch') config.pids.pitch.dMax = Math.round(val);
+        else if (key === 'f_pitch') config.pids.pitch.f = Math.round(val);
 
         else if (key === 'p_yaw') config.pids.yaw.p = Math.round(val);
         else if (key === 'i_yaw') config.pids.yaw.i = Math.round(val);
         else if (key === 'd_yaw') config.pids.yaw.d = Math.round(val);
         else if (key === 'f_yaw') config.pids.yaw.f = Math.round(val);
 
-        else if (key === 'anti_gravity_gain') config.antiGravity = Math.round(val);
+        else if (key === 'anti_gravity_gain') {
+          config.antiGravity = val > 250 ? Math.round(val / 45) : Math.round(val);
+        }
         else if (key === 'tpa_rate') config.tpaRate = +(val > 1 ? val / 100 : val).toFixed(2);
         else if (key === 'tpa_breakpoint') config.tpaBreakpoint = Math.round(val);
-        else if (key === 'dyn_idle_min_rpm') config.dynamicIdle = Math.round(val / 100);
+        else if (key === 'dyn_idle_min_rpm') {
+          config.dynamicIdle = val > 200 ? Math.round(val / 100) : Math.round(val);
+        }
+        else if (key === 'simplified_gyro_filter_multiplier') {
+          config.gyroFilterSlider = +(val / 100).toFixed(2);
+        }
+        else if (key === 'simplified_dterm_filter_multiplier') {
+          config.dtermFilterSlider = +(val / 100).toFixed(2);
+        }
       }
     }
 
-    return config;
+    delete config._hasDMinRoll;
+    delete config._hasDMinPitch;
+    return foundAny ? config : null;
   }
 
   /**
@@ -824,7 +876,7 @@ class TuningEngine {
         yaw: { p: 45, i: 85, d: 0, f: 100, dMax: 0 }
       },
       masterMultiplier: 1.0,
-      antiGravity: 3500,
+      antiGravity: 80,
       tpaRate: 0.65,
       tpaBreakpoint: 1350,
       gyroFilterSlider: 1.0,
@@ -911,8 +963,16 @@ class TuningEngine {
     if (checkNum('d_roll') !== null) { extracted.pids.roll.d = Math.round(checkNum('d_roll')); hasAnyPid = true; }
     if (checkNum('f_roll') !== null) { extracted.pids.roll.f = Math.round(checkNum('f_roll')); hasAnyPid = true; }
 
-    if (checkNum('master_multiplier') !== null) extracted.masterMultiplier = checkNum('master_multiplier');
-    if (checkNum('anti_gravity_gain') !== null) extracted.antiGravity = Math.round(checkNum('anti_gravity_gain'));
+    if (checkNum('simplified_master_multiplier') !== null) {
+      extracted.masterMultiplier = +(checkNum('simplified_master_multiplier') / 100).toFixed(2);
+    } else if (checkNum('master_multiplier') !== null) {
+      const mm = checkNum('master_multiplier');
+      extracted.masterMultiplier = mm > 5 ? +(mm / 100).toFixed(2) : mm;
+    }
+    if (checkNum('anti_gravity_gain') !== null) {
+      const ag = checkNum('anti_gravity_gain');
+      extracted.antiGravity = ag > 250 ? Math.round(ag / 45) : Math.round(ag);
+    }
     if (checkNum('tpa_rate') !== null) {
       const tr = checkNum('tpa_rate');
       extracted.tpaRate = +(tr > 1 ? tr / 100 : tr).toFixed(2);

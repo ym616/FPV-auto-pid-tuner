@@ -175,7 +175,9 @@ class TestBetaflightDiff(unittest.TestCase):
         set f_pitch = 140
         set p_roll = 52
         set d_roll = 36
-        set anti_gravity_gain = 4000
+        set d_min_roll = 30
+        set simplified_master_multiplier = 115
+        set anti_gravity_gain = 85
         """
         parsed = {}
         for line in diff_text.strip().split("\n"):
@@ -187,10 +189,12 @@ class TestBetaflightDiff(unittest.TestCase):
                     v = float(parts[1].strip())
                     parsed[k] = v
 
-        self.assertEqual(parsed.get("master_multiplier"), 1.15)
+        self.assertEqual(parsed.get("simplified_master_multiplier"), 115.0)
         self.assertEqual(parsed.get("p_pitch"), 58.0)
         self.assertEqual(parsed.get("d_pitch"), 42.0)
-        self.assertEqual(parsed.get("anti_gravity_gain"), 4000.0)
+        self.assertEqual(parsed.get("d_min_roll"), 30.0)
+        self.assertEqual(parsed.get("anti_gravity_gain"), 85.0)
+        self.assertLessEqual(parsed.get("anti_gravity_gain"), 250.0)
 
 # Test Drone Physics Modeling & Hardware Sizing
 class TestDronePhysicsModel(unittest.TestCase):
@@ -201,8 +205,8 @@ class TestDronePhysicsModel(unittest.TestCase):
         
         disk_area = math.pi * ((prop / 2.0) ** 2)
         disk_loading = weight / disk_area
-        anti_gravity = round(3200 + (disk_loading - 15) * 35)
-        anti_gravity = max(3200, min(4800, anti_gravity))
+        anti_gravity = round(70 + (disk_loading - 15) * 1.2)
+        anti_gravity = max(65, min(130, anti_gravity))
         
         if prop <= 3.2:
             gyro_slider = 1.35

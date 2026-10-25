@@ -242,6 +242,86 @@ for (const jf of jsFiles) {
 }
 assert(true, 'All 95+ getElementById references across all JS files match index.html');
 
+console.log('\n=== 6. VALIDATING BETAFLIGHT 4.3/4.4/4.5 CLI COMMAND SYNTAX & VALUE RANGES ===');
+const bfAllowedNumericRanges = {
+  p_roll: [0, 200],
+  i_roll: [0, 200],
+  d_roll: [0, 200],
+  d_min_roll: [0, 200],
+  f_roll: [0, 1000],
+  p_pitch: [0, 200],
+  i_pitch: [0, 200],
+  d_pitch: [0, 200],
+  d_min_pitch: [0, 200],
+  f_pitch: [0, 1000],
+  p_yaw: [0, 200],
+  i_yaw: [0, 200],
+  d_yaw: [0, 200],
+  d_min_yaw: [0, 200],
+  f_yaw: [0, 1000],
+  anti_gravity_gain: [0, 250],
+  tpa_rate: [0, 100],
+  tpa_breakpoint: [1000, 2000],
+  dyn_idle_min_rpm: [0, 200],
+  simplified_master_multiplier: [0, 200],
+  simplified_gyro_filter_multiplier: [0, 200],
+  simplified_dterm_filter_multiplier: [0, 200]
+};
+const bfAllowedEnumParams = {
+  simplified_pids_mode: ['OFF', 'RP', 'RPY']
+};
+const bfForbiddenNames = new Set(['master_multiplier', 'd_max_roll', 'd_max_pitch', 'd_max_yaw']);
+
+for (const presetKey of Object.keys(tuningEngine.defaultPresets)) {
+  const rollStep = stepAnalyzer.analyzeAxis(bblSummary.roll.setpoint, bblSummary.roll.gyro, bblSummary.time);
+  const pitchStep = stepAnalyzer.analyzeAxis(bblSummary.pitch.setpoint, bblSummary.pitch.gyro, bblSummary.time);
+  const yawStep = stepAnalyzer.analyzeAxis(bblSummary.yaw.setpoint, bblSummary.yaw.gyro, bblSummary.time);
+  const rollFFT = fftAnalyzer.computeSpectrum(bblSummary.roll.gyro, 512);
+  const pitchFFT = fftAnalyzer.computeSpectrum(bblSummary.pitch.gyro, 512);
+
+  const rec = tuningEngine.generateRecommendation({
+    stepMetrics: { roll: rollStep, pitch: pitchStep, yaw: yawStep },
+    noiseMetrics: { roll: rollFFT, pitch: pitchFFT },
+    currentConfig: tuningEngine.defaultPresets[presetKey],
+    quadType: presetKey,
+    droneSpecs: { propSize: 3.0, weight: 165, cellCount: 4, motorKv: 3800, flyingStyle: 'freestyle' },
+    pilotSymptoms: [],
+    logInfo: { fileName: 'test_flight.bbl', isUserUploaded: true, duration: bblSummary.duration, sampleRate: bblSummary.sampleRate, totalSamples: bblSummary.totalSamples }
+  });
+  const lines = rec.cliScript.split(/\r?\n/);
+  let setCount = 0;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line === 'save') continue;
+    if (line.startsWith('set ')) {
+      setCount++;
+      const eqIdx = line.indexOf('=');
+      assert(eqIdx > 4, `Valid 'set <name> = <val>' format in ${presetKey}: "${line}"`);
+      const paramName = line.slice(4, eqIdx).trim();
+      const paramValStr = line.slice(eqIdx + 1).trim();
+
+      assert(!bfForbiddenNames.has(paramName), `Forbidden/invalid Betaflight CLI parameter "${paramName}" is NOT emitted`);
+
+      if (bfAllowedEnumParams[paramName]) {
+        assert(
+          bfAllowedEnumParams[paramName].includes(paramValStr),
+          `CLI enum parameter ${paramName} = ${paramValStr} is valid (${presetKey})`
+        );
+      } else if (bfAllowedNumericRanges[paramName]) {
+        const numVal = Number(paramValStr);
+        const [minVal, maxVal] = bfAllowedNumericRanges[paramName];
+        assert(
+          Number.isInteger(numVal) && numVal >= minVal && numVal <= maxVal,
+          `CLI numeric parameter ${paramName} = ${paramValStr} is an integer within Betaflight allowed range [${minVal}, ${maxVal}] (${presetKey})`
+        );
+      } else {
+        assert(false, `Unknown Betaflight CLI parameter emitted: "${paramName}" in line "${line}"`);
+      }
+    }
+  }
+  assert(setCount >= 18, `Preset ${presetKey} emitted ${setCount} valid Betaflight CLI 'set' commands`);
+}
+
 if (failures > 0) {
   console.error(`\nTotal failures: ${failures}`);
   process.exit(1);
