@@ -446,6 +446,22 @@ class TestJSTuningEngineEndToEnd(unittest.TestCase):
         self.assertLess(h_bouncy, 80)
         self.assertLess(h_noisy, 82)
 
+    def test_cli_script_commits_simplified_tuning_before_custom_pids(self):
+        engine_path = os.path.join(self.root_dir, "js", "tuning_engine.js")
+        with open(engine_path, "r", encoding="utf-8") as f:
+            engine_js = f.read()
+
+        self.assertIn("simplified_tuning apply", engine_js, "CLI generator must emit 'simplified_tuning apply'")
+        self.assertIn("set simplified_pids_mode = OFF", engine_js, "CLI generator must disable simplified_pids_mode before applying")
+        self.assertIn("gyro_lpf1_dyn_min_hz", engine_js, "CLI generator must emit explicit gyro LPF cutoffs")
+        self.assertIn("dterm_lpf1_dyn_min_hz", engine_js, "CLI generator must emit explicit D-term LPF cutoffs")
+
+        # Verify 'simplified_tuning apply' is emitted before 'set p_roll =' in generateCliScript
+        idx_apply = engine_js.find("`simplified_tuning apply`")
+        idx_p_roll = engine_js.find("`set p_roll =")
+        self.assertGreater(idx_apply, 0)
+        self.assertGreater(idx_p_roll, idx_apply, "'simplified_tuning apply' must execute before custom axis PIDs are set")
+
 if __name__ == "__main__":
     unittest.main()
 

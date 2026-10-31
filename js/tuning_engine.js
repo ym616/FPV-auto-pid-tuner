@@ -652,7 +652,7 @@ class TuningEngine {
                         : propwashScoreVal >= 55 ? `Moderate (${propwashScoreVal}%)`
                         : `Poor (${propwashScoreVal}%)`;
 
-    // Generate Betaflight CLI Script with Log Provenance
+    // Generate Betaflight CLI Script with Log Provenance & Firmware Detection
     const logInfo = input.logInfo || {};
     const cliScript = this.generateCliScript({
       quadName: baseline.name,
@@ -664,6 +664,7 @@ class TuningEngine {
       recGyroSlider,
       recDtermSlider,
       recDynamicIdle,
+      firmwareVersion: current.firmwareVersion || null,
       logName: logInfo.fileName || 'Flight Log',
       sampleRate: logInfo.sampleRate,
       duration: logInfo.duration,
@@ -713,13 +714,19 @@ class TuningEngine {
 
   generateCliScript(rec) {
     const maneuversText = rec.stepCount ? `${rec.stepCount} step flicks analyzed` : 'Continuous flight tracking deconvolution';
+    const fwVer = String(rec.firmwareVersion || '4.5');
+    const isModern2025 = fwVer.startsWith('2025') || fwVer.startsWith('4.6') || fwVer.startsWith('10.11');
+    const isLegacy43 = fwVer.startsWith('4.3');
 
-    // Ensure Betaflight 4.3/4.4/4.5 compliant ranges & names:
-    // - In Betaflight CLI, `d_roll` / `d_pitch` is D-Max (peak D) and `d_min_roll` / `d_min_pitch` is base steady-state D
+    // Ensure Betaflight 4.3 / 4.4 / 4.5 / 2025.12 compliant ranges & names:
+    // - In Betaflight 4.3/4.4/4.5, `d_roll` / `d_pitch` is D-Max (peak D) and `d_min_roll` / `d_min_pitch` is steady-state D
+    // - In Betaflight 4.6 / 2025.12+, `d_roll` / `d_pitch` is steady-state D and `d_max_roll` / `d_max_pitch` is peak D
     // - `simplified_master_multiplier` is integer 0..200 (100 = 1.0x)
-    // - `anti_gravity_gain` in BF 4.4/4.5 is integer 0..250 (default 80)
+    // - `anti_gravity_gain` in BF 4.4+ is integer 0..250 (default 80); in BF 4.3 it is 1000..10000 (default 3500)
     // - `dyn_idle_min_rpm` is integer 0..200 (in units of 100 RPM, so 45 = 4500 RPM)
-    // - `simplified_gyro_filter_multiplier` and `simplified_dterm_filter_multiplier` are integers 0..200 (100 = 1.0x)
+    // - `simplified_gyro_filter_multiplier` and `simplified_dterm_filter_multiplier` are integers 10..200 (100 = 1.0x)
+    // - `simplified_tuning apply` must be called BEFORE raw PID `set` commands so slider recalculation commits filter Hz
+    //   without overwriting custom P/I/D/F gains.
     const dMinRoll = Math.max(0, Math.min(200, Math.round(rec.recPids.roll.d)));
     const dMaxRoll = Math.max(dMinRoll, Math.min(200, Math.round(rec.recPids.roll.dMax || rec.recPids.roll.d)));
     const dMinPitch = Math.max(0, Math.min(200, Math.round(rec.recPids.pitch.d)));
@@ -727,7 +734,9 @@ class TuningEngine {
 
     const masterMultInt = Math.max(10, Math.min(200, Math.round((rec.recMasterMultiplier || 1.0) * 100)));
     const rawAg = rec.recAntiGravity || 80;
-    const antiGravityInt = Math.max(0, Math.min(250, rawAg > 250 ? Math.round(rawAg / 45) : Math.round(rawAg)));
+    const ag250 = Math.max(0, Math.min(250, rawAg > 250 ? Math.round(rawAg / 45) : Math.round(rawAg)));
+    const antiGravityInt = isLegacy43 ? Math.max(1000, Math.min(10000, ag250 * 45)) : ag250;
+
     const tpaRateInt = Math.max(0, Math.min(100, Math.round((rec.recTpaRate || 0.65) * 100)));
     const tpaBreakInt = Math.max(1000, Math.min(2000, Math.round(rec.recTpaBreakpoint || 1350)));
     const rawDynIdle = rec.recDynamicIdle || 40;
@@ -735,43 +744,71 @@ class TuningEngine {
     const gyroMultInt = Math.max(10, Math.min(200, Math.round((rec.recGyroSlider || 1.0) * 100)));
     const dtermMultInt = Math.max(10, Math.min(200, Math.round((rec.recDtermSlider || 1.0) * 100)));
 
+    // Compute concrete filter cutoffs scaled by slider multipliers (BF defaults: Gyro LPF1 250..500Hz, LPF2 500Hz; Dterm LPF1 75..150Hz, LPF2 150Hz)
+    const gyroDynMinHz = Math.max(0, Math.min(1000, Math.trunc((250 * gyroMultInt) / 100)));
+    const gyroDynMaxHz = Math.max(0, Math.min(1000, Math.trunc((500 * gyroMultInt) / 100)));
+    const gyroLpf2Hz = Math.max(0, Math.min(1000, Math.trunc((500 * gyroMultInt) / 100)));
+    const dtermDynMinHz = Math.max(0, Math.min(1000, Math.trunc((75 * dtermMultInt) / 100)));
+    const dtermDynMaxHz = Math.max(0, Math.min(1000, Math.trunc((150 * dtermMultInt) / 100)));
+    const dtermLpf2Hz = Math.max(0, Math.min(1000, Math.trunc((150 * dtermMultInt) / 100)));
+
+    const rollDLines = isModern2025
+      ? [`set d_roll = ${dMinRoll}`, `set d_max_roll = ${dMaxRoll}`]
+      : [`set d_roll = ${dMaxRoll}`, `set d_min_roll = ${dMinRoll}`];
+
+    const pitchDLines = isModern2025
+      ? [`set d_pitch = ${dMinPitch}`, `set d_max_pitch = ${dMaxPitch}`]
+      : [`set d_pitch = ${dMaxPitch}`, `set d_min_pitch = ${dMinPitch}`];
+
+    const yawDLines = isModern2025
+      ? [`set d_yaw = ${Math.round(rec.recPids.yaw.d)}`, `set d_max_yaw = 0`]
+      : [`set d_yaw = ${Math.round(rec.recPids.yaw.d)}`, `set d_min_yaw = 0`];
+
     const lines = [
       `# ======================================================`,
-      `# AeroPID Pro - Betaflight 4.3 / 4.4 / 4.5 Custom Tune`,
+      `# AeroPID Pro - Betaflight Custom Tune (BF ${fwVer})`,
       `# Source Log: ${rec.logName}`,
       `# Flight Telemetry: ${rec.duration ? rec.duration + 's duration' : 'N/A'} @ ${rec.sampleRate ? rec.sampleRate + ' Hz' : '1000 Hz'}${rec.totalSamples ? ' (' + rec.totalSamples.toLocaleString() + ' frames)' : ''}`,
       `# Analysis Basis: ${maneuversText}`,
       `# Base Profile: ${rec.quadName}`,
       `# ======================================================`,
       ``,
-      `# --- Roll PID, D-Min & Feedforward ---`,
+      `# --- 1. Simplified Filter Multipliers & Mode Setup ---`,
+      `set simplified_gyro_filter = ON`,
+      `set simplified_gyro_filter_multiplier = ${gyroMultInt}`,
+      `set simplified_dterm_filter = ON`,
+      `set simplified_dterm_filter_multiplier = ${dtermMultInt}`,
+      `set simplified_master_multiplier = ${masterMultInt}`,
+      `set simplified_pids_mode = OFF`,
+      `simplified_tuning apply`,
+      ``,
+      `# --- 2. Explicit Filter Cutoffs (Ensures Filters Apply Even if Static LPF is Off) ---`,
+      `set gyro_lpf1_dyn_min_hz = ${gyroDynMinHz}`,
+      `set gyro_lpf1_dyn_max_hz = ${gyroDynMaxHz}`,
+      `set gyro_lpf2_static_hz = ${gyroLpf2Hz}`,
+      `set dterm_lpf1_dyn_min_hz = ${dtermDynMinHz}`,
+      `set dterm_lpf1_dyn_max_hz = ${dtermDynMaxHz}`,
+      `set dterm_lpf2_static_hz = ${dtermLpf2Hz}`,
+      ``,
+      `# --- 3. Roll PID, Dynamic D & Feedforward ---`,
       `set p_roll = ${Math.round(rec.recPids.roll.p)}`,
       `set i_roll = ${Math.round(rec.recPids.roll.i)}`,
-      `set d_roll = ${dMaxRoll}`,
-      `set d_min_roll = ${dMinRoll}`,
+      ...rollDLines,
       `set f_roll = ${Math.round(rec.recPids.roll.f)}`,
       ``,
-      `# --- Pitch PID, D-Min & Feedforward ---`,
+      `# --- 4. Pitch PID, Dynamic D & Feedforward ---`,
       `set p_pitch = ${Math.round(rec.recPids.pitch.p)}`,
       `set i_pitch = ${Math.round(rec.recPids.pitch.i)}`,
-      `set d_pitch = ${dMaxPitch}`,
-      `set d_min_pitch = ${dMinPitch}`,
+      ...pitchDLines,
       `set f_pitch = ${Math.round(rec.recPids.pitch.f)}`,
       ``,
-      `# --- Yaw PID & Feedforward ---`,
+      `# --- 5. Yaw PID & Feedforward ---`,
       `set p_yaw = ${Math.round(rec.recPids.yaw.p)}`,
       `set i_yaw = ${Math.round(rec.recPids.yaw.i)}`,
-      `set d_yaw = ${Math.round(rec.recPids.yaw.d)}`,
-      `set d_min_yaw = 0`,
+      ...yawDLines,
       `set f_yaw = ${Math.round(rec.recPids.yaw.f)}`,
       ``,
-      `# --- Master Multiplier & Simplified Sliders ---`,
-      `set simplified_pids_mode = OFF`,
-      `set simplified_master_multiplier = ${masterMultInt}`,
-      `set simplified_gyro_filter_multiplier = ${gyroMultInt}`,
-      `set simplified_dterm_filter_multiplier = ${dtermMultInt}`,
-      ``,
-      `# --- Anti-Gravity, TPA & Dynamic Idle ---`,
+      `# --- 6. Anti-Gravity, TPA & Dynamic Idle ---`,
       `set anti_gravity_gain = ${antiGravityInt}`,
       `set tpa_rate = ${tpaRateInt}`,
       `set tpa_breakpoint = ${tpaBreakInt}`,
@@ -794,7 +831,15 @@ class TuningEngine {
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
+      if (!line) continue;
+
+      if (line.startsWith('#')) {
+        const verMatch = line.match(/Betaflight\s*\/\s*\S+\s*\([^)]+\)\s*(202[0-9]\.[0-9]+|4\.[3456]\.[0-9]+)/i);
+        if (verMatch) {
+          config.firmwareVersion = verMatch[1].startsWith('202') ? '2025.12' : verMatch[1].slice(0, 3);
+        }
+        continue;
+      }
 
       const match = line.match(/^set\s+([a-zA-Z0-9_]+)\s*=\s*([0-9.]+)/i);
       if (match) {
@@ -803,34 +848,56 @@ class TuningEngine {
         if (isNaN(val)) continue;
         foundAny = true;
 
-        // Map Betaflight CLI keys (supports both 4.3/4.4/4.5 official names and legacy aliases)
+        // Map Betaflight CLI keys (supports 4.3/4.4/4.5 and 4.6/2025.12 official names)
         if (key === 'simplified_master_multiplier' || key === 'master_multiplier') {
           config.masterMultiplier = val > 5 ? +(val / 100).toFixed(2) : val;
         }
         else if (key === 'p_roll') config.pids.roll.p = Math.round(val);
         else if (key === 'i_roll') config.pids.roll.i = Math.round(val);
         else if (key === 'd_roll') {
-          config.pids.roll.dMax = Math.round(val);
-          if (!config._hasDMinRoll) config.pids.roll.d = Math.round(val * 0.85);
+          if (config._hasDMaxRoll) {
+            config.pids.roll.d = Math.round(val);
+          } else {
+            config.pids.roll.dMax = Math.round(val);
+            if (!config._hasDMinRoll) config.pids.roll.d = Math.round(val * 0.85);
+          }
+          config._rawDRoll = Math.round(val);
         }
         else if (key === 'd_min_roll') {
           config.pids.roll.d = Math.round(val);
           config._hasDMinRoll = true;
+          if (!config.firmwareVersion) config.firmwareVersion = '4.5';
         }
-        else if (key === 'd_max_roll') config.pids.roll.dMax = Math.round(val);
+        else if (key === 'd_max_roll') {
+          config.pids.roll.dMax = Math.round(val);
+          if (config._rawDRoll !== undefined) config.pids.roll.d = config._rawDRoll;
+          config._hasDMaxRoll = true;
+          config.firmwareVersion = '2025.12';
+        }
         else if (key === 'f_roll') config.pids.roll.f = Math.round(val);
 
         else if (key === 'p_pitch') config.pids.pitch.p = Math.round(val);
         else if (key === 'i_pitch') config.pids.pitch.i = Math.round(val);
         else if (key === 'd_pitch') {
-          config.pids.pitch.dMax = Math.round(val);
-          if (!config._hasDMinPitch) config.pids.pitch.d = Math.round(val * 0.85);
+          if (config._hasDMaxPitch) {
+            config.pids.pitch.d = Math.round(val);
+          } else {
+            config.pids.pitch.dMax = Math.round(val);
+            if (!config._hasDMinPitch) config.pids.pitch.d = Math.round(val * 0.85);
+          }
+          config._rawDPitch = Math.round(val);
         }
         else if (key === 'd_min_pitch') {
           config.pids.pitch.d = Math.round(val);
           config._hasDMinPitch = true;
+          if (!config.firmwareVersion) config.firmwareVersion = '4.5';
         }
-        else if (key === 'd_max_pitch') config.pids.pitch.dMax = Math.round(val);
+        else if (key === 'd_max_pitch') {
+          config.pids.pitch.dMax = Math.round(val);
+          if (config._rawDPitch !== undefined) config.pids.pitch.d = config._rawDPitch;
+          config._hasDMaxPitch = true;
+          config.firmwareVersion = '2025.12';
+        }
         else if (key === 'f_pitch') config.pids.pitch.f = Math.round(val);
 
         else if (key === 'p_yaw') config.pids.yaw.p = Math.round(val);
@@ -839,6 +906,7 @@ class TuningEngine {
         else if (key === 'f_yaw') config.pids.yaw.f = Math.round(val);
 
         else if (key === 'anti_gravity_gain') {
+          if (val > 250 && !config.firmwareVersion) config.firmwareVersion = '4.3';
           config.antiGravity = val > 250 ? Math.round(val / 45) : Math.round(val);
         }
         else if (key === 'tpa_rate') config.tpaRate = +(val > 1 ? val / 100 : val).toFixed(2);
@@ -857,6 +925,10 @@ class TuningEngine {
 
     delete config._hasDMinRoll;
     delete config._hasDMinPitch;
+    delete config._hasDMaxRoll;
+    delete config._hasDMaxPitch;
+    delete config._rawDRoll;
+    delete config._rawDPitch;
     return foundAny ? config : null;
   }
 
@@ -882,8 +954,21 @@ class TuningEngine {
       gyroFilterSlider: 1.0,
       dtermFilterSlider: 1.0,
       dynamicIdle: 40,
-      detectedCells: null
+      detectedCells: null,
+      firmwareVersion: '4.5'
     };
+
+    // Detect Betaflight Firmware Version from Blackbox headers
+    const revStr = String(metadata['firmware_revision'] || metadata['firmware_version'] || '');
+    if (/202[5-9]\.|4\.6/i.test(revStr)) {
+      extracted.firmwareVersion = '2025.12';
+    } else if (/4\.3\./.test(revStr)) {
+      extracted.firmwareVersion = '4.3';
+    } else if (/4\.4\./.test(revStr)) {
+      extracted.firmwareVersion = '4.4';
+    } else if (/4\.5\./.test(revStr)) {
+      extracted.firmwareVersion = '4.5';
+    }
 
     // 1. Check vbatref / battery
     if (metadata.vbatref) {
@@ -929,17 +1014,24 @@ class TuningEngine {
       }
     }
 
-    // Betaflight BBL headers: d_min (D-term steady state) and feedforward_weight
+    // Betaflight BBL headers: d_min (4.3/4.4/4.5) or d_max (4.6/2025.12) and feedforward_weight
     if (metadata.d_min) {
       const dMins = metadata.d_min.split(',').map(s => parseInt(s, 10));
       if (dMins.length >= 2 && !isNaN(dMins[0]) && dMins[0] > 0) {
-        // In Betaflight, rollPID[2] is D-max and d_min[0] is base D!
+        // In Betaflight 4.3-4.5, rollPID[2] is D-max and d_min[0] is base D!
         extracted.pids.roll.dMax = extracted.pids.roll.d;
         extracted.pids.roll.d = dMins[0];
         if (dMins[1] > 0) {
           extracted.pids.pitch.dMax = extracted.pids.pitch.d;
           extracted.pids.pitch.d = dMins[1];
         }
+      }
+    } else if (metadata.d_max) {
+      const dMaxs = metadata.d_max.split(',').map(s => parseInt(s, 10));
+      if (dMaxs.length >= 2 && !isNaN(dMaxs[0]) && dMaxs[0] > 0) {
+        extracted.pids.roll.dMax = dMaxs[0];
+        if (dMaxs[1] > 0) extracted.pids.pitch.dMax = dMaxs[1];
+        extracted.firmwareVersion = '2025.12';
       }
     }
     if (metadata.feedforward_weight || metadata.ff_weight) {

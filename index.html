@@ -365,15 +365,26 @@
 
           <!-- Betaflight CLI Generator Box -->
           <div class="card">
-            <div class="card-header-bar">
+            <div class="card-header-bar" style="flex-wrap: wrap; gap: 0.5rem;">
               <div class="card-title">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
                 Betaflight CLI Script
               </div>
-              <button class="btn btn-primary btn-sm" id="btnCopyCli">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>
-                Copy to Clipboard
-              </button>
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                <label for="selectBfVersion" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500;">Target Firmware:</label>
+                <select class="form-select" id="selectBfVersion" style="width: auto; padding: 0.28rem 0.6rem; font-size: 0.78rem; height: auto;">
+                  <option value="4.5" selected>Betaflight 4.4 / 4.5 (Standard)</option>
+                  <option value="2025.12">Betaflight 2025.12 / 4.6+</option>
+                  <option value="4.3">Betaflight 4.3 (Legacy AG Scale)</option>
+                </select>
+                <button class="btn btn-primary btn-sm" id="btnCopyCli">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>
+                  Copy to Clipboard
+                </button>
+              </div>
+            </div>
+            <div style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 0.65rem; line-height: 1.4;">
+              Applies filter multipliers first via <code>simplified_tuning apply</code>, sets <code>simplified_pids_mode = OFF</code> so custom PIDs are never overwritten by sliders, and saves to EEPROM.
             </div>
             <pre class="cli-box" id="cliOutputBox"># Load a log file or click a benchmark scenario to generate CLI commands</pre>
           </div>
@@ -785,14 +796,14 @@ set simplified_master_multiplier = 105..."></textarea>
   </footer>
 
   <!-- Scripts with Cache-Buster -->
-  <script src="js/parser.js?v=3.5"></script>
-  <script src="js/step_response.js?v=3.5"></script>
-  <script src="js/fft_analyzer.js?v=3.5"></script>
-  <script src="js/tuning_engine.js?v=3.5"></script>
-  <script src="js/simulator.js?v=3.5"></script>
-  <script src="js/drone_viewer.js?v=3.5"></script>
-  <script src="js/demo_data.js?v=3.5"></script>
-  <script src="js/charts.js?v=3.5"></script>
-  <script src="js/app.js?v=3.5"></script>
+  <script src="js/parser.js?v=3.6"></script>
+  <script src="js/step_response.js?v=3.6"></script>
+  <script src="js/fft_analyzer.js?v=3.6"></script>
+  <script src="js/tuning_engine.js?v=3.6"></script>
+  <script src="js/simulator.js?v=3.6"></script>
+  <script src="js/drone_viewer.js?v=3.6"></script>
+  <script src="js/demo_data.js?v=3.6"></script>
+  <script src="js/charts.js?v=3.6"></script>
+  <script src="js/app.js?v=3.6"></script>
 </body>
 </html>

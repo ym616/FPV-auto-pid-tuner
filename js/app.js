@@ -140,6 +140,17 @@ class AeroPIDApp {
       });
     }
 
+    // Betaflight Firmware Version Selector
+    const selectBfVersion = document.getElementById('selectBfVersion');
+    if (selectBfVersion) {
+      selectBfVersion.addEventListener('change', () => {
+        if (this.currentConfig) {
+          this.currentConfig.firmwareVersion = selectBfVersion.value;
+        }
+        this.analyzeAndRecommend();
+      });
+    }
+
     // Print / PDF Button
     const btnExportReport = document.getElementById('btnExportReport');
     if (btnExportReport) {
@@ -160,6 +171,7 @@ class AeroPIDApp {
         const parsed = this.tuningEngine.parseBetaflightDiff(text);
         if (parsed) {
           this.currentConfig = parsed;
+          this.syncBfVersionSelect();
           this.analyzeAndRecommend();
           this.showToast('Betaflight diff parsed successfully!');
         } else {
@@ -174,6 +186,7 @@ class AeroPIDApp {
       btnResetConfig.addEventListener('click', () => {
         const qType = document.getElementById('quadTypeSelect').value;
         this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets[qType]));
+        this.syncBfVersionSelect(true);
         this.analyzeAndRecommend();
         this.showToast('Config reset to profile default.');
       });
@@ -184,7 +197,10 @@ class AeroPIDApp {
     if (quadTypeSelect) {
       quadTypeSelect.addEventListener('change', () => {
         const qType = quadTypeSelect.value;
+        const prevVer = this.currentConfig?.firmwareVersion;
         this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets[qType]));
+        if (prevVer) this.currentConfig.firmwareVersion = prevVer;
+        this.syncBfVersionSelect(true);
         this.analyzeAndRecommend();
       });
     }
@@ -256,12 +272,31 @@ class AeroPIDApp {
         const qType = quadTypeSelect ? quadTypeSelect.value : '5in_freestyle_6s';
         if (this.tuningEngine.defaultPresets[qType]) {
           this.currentConfig = JSON.parse(JSON.stringify(this.tuningEngine.defaultPresets[qType]));
+          this.syncBfVersionSelect(true);
         }
 
         this.readDroneSpecs();
         this.analyzeAndRecommend();
       });
     });
+  }
+
+  syncBfVersionSelect(fromDropdownToConfig = false) {
+    const selectBfVersion = document.getElementById('selectBfVersion');
+    if (!selectBfVersion || !this.currentConfig) return;
+
+    if (fromDropdownToConfig) {
+      this.currentConfig.firmwareVersion = selectBfVersion.value || '4.5';
+    } else if (this.currentConfig.firmwareVersion) {
+      const fw = String(this.currentConfig.firmwareVersion);
+      if (fw.includes('2025') || fw.includes('4.6')) {
+        selectBfVersion.value = '2025.12';
+      } else if (fw.startsWith('4.3')) {
+        selectBfVersion.value = '4.3';
+      } else {
+        selectBfVersion.value = '4.5';
+      }
+    }
   }
 
   readDroneSpecs() {
@@ -335,11 +370,13 @@ class AeroPIDApp {
             const sel = document.getElementById('selectCellCount');
             if (sel) sel.value = String(autoConfig.detectedCells);
           }
+          this.syncBfVersionSelect();
         } else {
           // Reset baseline to selected quad preset so previous log's PIDs do not carry over
           const quadType = document.getElementById('quadTypeSelect')?.value || '5in_freestyle_6s';
           const preset = this.tuningEngine.defaultPresets[quadType] || this.tuningEngine.defaultPresets['5in_freestyle_6s'];
           this.currentConfig = JSON.parse(JSON.stringify(preset));
+          this.syncBfVersionSelect(true);
         }
 
         // Feed data to interactive 3D drone & stick viewer

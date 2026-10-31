@@ -242,22 +242,25 @@ for (const jf of jsFiles) {
 }
 assert(true, 'All 95+ getElementById references across all JS files match index.html');
 
-console.log('\n=== 6. VALIDATING BETAFLIGHT 4.3/4.4/4.5 CLI COMMAND SYNTAX & VALUE RANGES ===');
+console.log('\n=== 6. VALIDATING BETAFLIGHT 4.3 / 4.4 / 4.5 / 2025.12 CLI COMMAND SYNTAX & VALUE RANGES ===');
 const bfAllowedNumericRanges = {
   p_roll: [0, 200],
   i_roll: [0, 200],
   d_roll: [0, 200],
   d_min_roll: [0, 200],
+  d_max_roll: [0, 200],
   f_roll: [0, 1000],
   p_pitch: [0, 200],
   i_pitch: [0, 200],
   d_pitch: [0, 200],
   d_min_pitch: [0, 200],
+  d_max_pitch: [0, 200],
   f_pitch: [0, 1000],
   p_yaw: [0, 200],
   i_yaw: [0, 200],
   d_yaw: [0, 200],
   d_min_yaw: [0, 200],
+  d_max_yaw: [0, 200],
   f_yaw: [0, 1000],
   anti_gravity_gain: [0, 250],
   tpa_rate: [0, 100],
@@ -265,12 +268,20 @@ const bfAllowedNumericRanges = {
   dyn_idle_min_rpm: [0, 200],
   simplified_master_multiplier: [0, 200],
   simplified_gyro_filter_multiplier: [0, 200],
-  simplified_dterm_filter_multiplier: [0, 200]
+  simplified_dterm_filter_multiplier: [0, 200],
+  gyro_lpf1_dyn_min_hz: [0, 1000],
+  gyro_lpf1_dyn_max_hz: [0, 1000],
+  gyro_lpf2_static_hz: [0, 1000],
+  dterm_lpf1_dyn_min_hz: [0, 1000],
+  dterm_lpf1_dyn_max_hz: [0, 1000],
+  dterm_lpf2_static_hz: [0, 1000]
 };
 const bfAllowedEnumParams = {
-  simplified_pids_mode: ['OFF', 'RP', 'RPY']
+  simplified_pids_mode: ['OFF', 'RP', 'RPY'],
+  simplified_gyro_filter: ['OFF', 'ON'],
+  simplified_dterm_filter: ['OFF', 'ON']
 };
-const bfForbiddenNames = new Set(['master_multiplier', 'd_max_roll', 'd_max_pitch', 'd_max_yaw']);
+const bfForbiddenNames45 = new Set(['master_multiplier', 'd_max_roll', 'd_max_pitch', 'd_max_yaw']);
 
 for (const presetKey of Object.keys(tuningEngine.defaultPresets)) {
   const rollStep = stepAnalyzer.analyzeAxis(bblSummary.roll.setpoint, bblSummary.roll.gyro, bblSummary.time);
@@ -290,9 +301,19 @@ for (const presetKey of Object.keys(tuningEngine.defaultPresets)) {
   });
   const lines = rec.cliScript.split(/\r?\n/);
   let setCount = 0;
+  let simplifiedPidsOffIndex = -1;
+  let simplifiedApplyIndex = -1;
+  let firstPidSetIndex = -1;
+  let lineIndex = 0;
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
+    lineIndex++;
     if (!line || line.startsWith('#') || line === 'save') continue;
+    if (line === 'simplified_tuning apply') {
+      simplifiedApplyIndex = lineIndex;
+      continue;
+    }
     if (line.startsWith('set ')) {
       setCount++;
       const eqIdx = line.indexOf('=');
@@ -300,7 +321,14 @@ for (const presetKey of Object.keys(tuningEngine.defaultPresets)) {
       const paramName = line.slice(4, eqIdx).trim();
       const paramValStr = line.slice(eqIdx + 1).trim();
 
-      assert(!bfForbiddenNames.has(paramName), `Forbidden/invalid Betaflight CLI parameter "${paramName}" is NOT emitted`);
+      if (paramName === 'simplified_pids_mode' && paramValStr === 'OFF') {
+        simplifiedPidsOffIndex = lineIndex;
+      }
+      if (paramName === 'p_roll' && firstPidSetIndex === -1) {
+        firstPidSetIndex = lineIndex;
+      }
+
+      assert(!bfForbiddenNames45.has(paramName), `Forbidden/invalid Betaflight 4.4/4.5 CLI parameter "${paramName}" is NOT emitted`);
 
       if (bfAllowedEnumParams[paramName]) {
         assert(
@@ -317,10 +345,45 @@ for (const presetKey of Object.keys(tuningEngine.defaultPresets)) {
       } else {
         assert(false, `Unknown Betaflight CLI parameter emitted: "${paramName}" in line "${line}"`);
       }
+    } else {
+      assert(false, `Unrecognized non-comment CLI command line: "${line}"`);
     }
   }
-  assert(setCount >= 18, `Preset ${presetKey} emitted ${setCount} valid Betaflight CLI 'set' commands`);
+  assert(setCount >= 24, `Preset ${presetKey} emitted ${setCount} valid Betaflight CLI 'set' commands (including explicit LPF cutoffs)`);
+  assert(
+    simplifiedPidsOffIndex > 0 && simplifiedApplyIndex > simplifiedPidsOffIndex && firstPidSetIndex > simplifiedApplyIndex,
+    `Preset ${presetKey} executes 'set simplified_pids_mode = OFF' (line ${simplifiedPidsOffIndex}) -> 'simplified_tuning apply' (line ${simplifiedApplyIndex}) BEFORE 'set p_roll' (line ${firstPidSetIndex})`
+  );
 }
+
+// Verify firmware version adaptation for BF 2025.12 (4.6+) and BF 4.3
+const baseCfg = JSON.parse(JSON.stringify(tuningEngine.defaultPresets['5in_freestyle_6s']));
+const rollStep = stepAnalyzer.analyzeAxis(bblSummary.roll.setpoint, bblSummary.roll.gyro, bblSummary.time);
+const pitchStep = stepAnalyzer.analyzeAxis(bblSummary.pitch.setpoint, bblSummary.pitch.gyro, bblSummary.time);
+const yawStep = stepAnalyzer.analyzeAxis(bblSummary.yaw.setpoint, bblSummary.yaw.gyro, bblSummary.time);
+const rollFFT = fftAnalyzer.computeSpectrum(bblSummary.roll.gyro, 512);
+const pitchFFT = fftAnalyzer.computeSpectrum(bblSummary.pitch.gyro, 512);
+
+const cfg2025 = { ...baseCfg, firmwareVersion: '2025.12' };
+const rec2025 = tuningEngine.generateRecommendation({
+  stepMetrics: { roll: rollStep, pitch: pitchStep, yaw: yawStep },
+  noiseMetrics: { roll: rollFFT, pitch: pitchFFT },
+  currentConfig: cfg2025,
+  quadType: '5in_freestyle_6s',
+  droneSpecs: { propSize: 5.0, weight: 680, cellCount: 6, motorKv: 1950, flyingStyle: 'freestyle' }
+});
+assert(rec2025.cliScript.includes('set d_max_roll =') && !rec2025.cliScript.includes('set d_min_roll ='), 'BF 2025.12 / 4.6+ mode emits d_max_roll/d_max_pitch instead of d_min_roll');
+
+const cfg43 = { ...baseCfg, firmwareVersion: '4.3' };
+const rec43 = tuningEngine.generateRecommendation({
+  stepMetrics: { roll: rollStep, pitch: pitchStep, yaw: yawStep },
+  noiseMetrics: { roll: rollFFT, pitch: pitchFFT },
+  currentConfig: cfg43,
+  quadType: '5in_freestyle_6s',
+  droneSpecs: { propSize: 5.0, weight: 680, cellCount: 6, motorKv: 1950, flyingStyle: 'freestyle' }
+});
+const agMatch43 = rec43.cliScript.match(/set anti_gravity_gain = (\d+)/);
+assert(agMatch43 && Number(agMatch43[1]) >= 1000 && Number(agMatch43[1]) <= 10000, 'BF 4.3 mode scales anti_gravity_gain to legacy [1000, 10000] range');
 
 if (failures > 0) {
   console.error(`\nTotal failures: ${failures}`);
